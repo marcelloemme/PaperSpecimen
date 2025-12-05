@@ -614,6 +614,45 @@ bool parseGlyphOutline(uint32_t codepoint) {
     return true;
 }
 
+// Helper function to draw a dashed line
+void drawDashedLine(float x1, float y1, float x2, float y2, uint8_t color) {
+    // Calculate line length and direction
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    float length = sqrt(dx * dx + dy * dy);
+
+    if (length < 0.5f) return; // Too short to draw
+
+    // Normalize direction
+    dx /= length;
+    dy /= length;
+
+    // Dash pattern: 5 pixels on, 3 pixels off
+    float dash_length = 5.0f;
+    float gap_length = 3.0f;
+    float pattern_length = dash_length + gap_length;
+
+    float distance = 0.0f;
+    bool drawing = true;
+
+    while (distance < length) {
+        float segment_length = drawing ? dash_length : gap_length;
+        float end_distance = distance + segment_length;
+        if (end_distance > length) end_distance = length;
+
+        if (drawing) {
+            float sx = x1 + dx * distance;
+            float sy = y1 + dy * distance;
+            float ex = x1 + dx * end_distance;
+            float ey = y1 + dy * end_distance;
+            canvas.drawLine(sx, sy, ex, ey, color);
+        }
+
+        distance = end_distance;
+        drawing = !drawing;
+    }
+}
+
 // Render outline on canvas
 void renderGlyphOutline() {
     if (!fontLoaded) {
@@ -691,6 +730,70 @@ void renderGlyphOutline() {
     }
 
     Serial.printf("Drew %d line segments\n", lines_drawn);
+
+    // ========================================
+    // STEP 7: Draw construction lines (dashed lines from control points to anchors)
+    // ========================================
+
+    int construction_lines_drawn = 0;
+
+    // For each segment with control points, draw dashed lines
+    for (int i = 0; i < g_num_segments; i++) {
+        OutlineSegment& seg = g_outline_segments[i];
+
+        if (seg.type == SEG_CONIC) {
+            // Quadratic Bézier: draw dashed line from start point to control point to end point
+            // We need to find the start point (previous segment's endpoint or last MOVE)
+            float start_x = 0, start_y = 0;
+
+            // Find the start point
+            if (i > 0) {
+                if (g_outline_segments[i-1].type == SEG_MOVE) {
+                    start_x = g_outline_segments[i-1].x;
+                    start_y = g_outline_segments[i-1].y;
+                } else {
+                    start_x = g_outline_segments[i-1].x;
+                    start_y = g_outline_segments[i-1].y;
+                }
+            }
+
+            // Draw dashed line from start to control point
+            drawDashedLine(start_x, start_y, seg.cx, seg.cy, 8); // Gray color
+            construction_lines_drawn++;
+
+            // Draw dashed line from control point to end
+            drawDashedLine(seg.cx, seg.cy, seg.x, seg.y, 8);
+            construction_lines_drawn++;
+
+        } else if (seg.type == SEG_CUBIC) {
+            // Cubic Bézier: draw dashed lines for both control points
+            float start_x = 0, start_y = 0;
+
+            if (i > 0) {
+                if (g_outline_segments[i-1].type == SEG_MOVE) {
+                    start_x = g_outline_segments[i-1].x;
+                    start_y = g_outline_segments[i-1].y;
+                } else {
+                    start_x = g_outline_segments[i-1].x;
+                    start_y = g_outline_segments[i-1].y;
+                }
+            }
+
+            // Draw dashed line from start to first control point
+            drawDashedLine(start_x, start_y, seg.cx, seg.cy, 8);
+            construction_lines_drawn++;
+
+            // Draw dashed line from first control point to second control point
+            drawDashedLine(seg.cx, seg.cy, seg.cx2, seg.cy2, 8);
+            construction_lines_drawn++;
+
+            // Draw dashed line from second control point to end
+            drawDashedLine(seg.cx2, seg.cy2, seg.x, seg.y, 8);
+            construction_lines_drawn++;
+        }
+    }
+
+    Serial.printf("Drew %d construction lines\n", construction_lines_drawn);
 
     // ========================================
     // STEP 4: Draw on-curve and off-curve points
