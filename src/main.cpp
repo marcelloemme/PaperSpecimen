@@ -631,10 +631,10 @@ void renderGlyphOutline() {
     canvas.setTextSize(24);
     canvas.setTextColor(15);
     canvas.setTextDatum(TC_DATUM);
-    canvas.drawString(fontName, 270, 20);
+    canvas.drawString(fontName, 270, 30); // Top label
 
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString(codepointStr, 270, 930); // Match original position
+    canvas.drawString(codepointStr, 270, 930); // Bottom label
 
     // Push to display with smart refresh logic
     canvas.pushCanvas(0, 0, UPDATE_MODE_GL16);
