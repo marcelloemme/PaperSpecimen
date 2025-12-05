@@ -515,7 +515,7 @@ bool parseGlyphOutline(uint32_t codepoint) {
     // Offset to center the glyph on display
     // Y axis is flipped (font coords increase upward, screen coords increase downward)
     float offset_x = centerX - bbox_center_x * scale;
-    float offset_y = centerY + bbox_center_y * scale; // Flip Y axis
+    float offset_y = centerY - bbox_center_y * scale; // Flip Y axis (subtract, not add)
 
     Serial.printf("Parsing outline: scale=%.4f, offset=(%.1f, %.1f)\n", scale, offset_x, offset_y);
 
