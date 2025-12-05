@@ -11,6 +11,50 @@
 // Canvas for rendering
 M5EPD_Canvas canvas(&M5.EPD);  // Single full screen canvas for everything
 
+// ========================================
+// FT_Face Access Workaround
+// ========================================
+// M5EPD_Canvas inherits from TFT_eSPI which has protected static _font_face
+// We use external symbol access to bypass protected access control
+
+// External declarations to access TFT_eSPI protected statics
+// This is a memory hack but works without modifying the library
+extern "C" {
+    // These symbols exist in TFT_eSPI compiled code
+    // We're just accessing them directly via linker
+}
+
+// Helper struct matching font_face_t from font_render.h
+struct font_face_accessor {
+    FT_Face ft_face;
+    uint16_t pixel_size;
+};
+
+// Access function using symbol name mangling knowledge
+FT_Face getFontFaceFromCanvas() {
+    // TFT_eSPI::_font_face is a static member
+    // We can access it via external linkage using the mangled name
+    // But this is compiler-specific and fragile
+
+    // ALTERNATIVE: Use the canvas object directly as a memory accessor
+    // Cast canvas to access its parent class protected members
+    // This works because M5EPD_Canvas IS-A TFT_eSPI
+
+    // SIMPLEST WORKAROUND: Access via canvas's internal methods
+    // The font is already loaded, we just need the FT_Face pointer
+
+    // For now, use a friend class hack via template specialization
+    // Actually, let's try the reinterpret_cast approach
+
+    // HACK: Get pointer to TFT_eSPI's static _font_face via memory layout
+    // This assumes the symbol is accessible via linker (it should be)
+
+    // Import the external symbol (defined in TFT_eSPI compiled code)
+    extern font_face_t _ZN8TFT_eSPI10_font_faceE; // mangled name for TFT_eSPI::_font_face
+
+    return _ZN8TFT_eSPI10_font_faceE.ft_face;
+}
+
 // Refresh logic state
 uint8_t partialRefreshCount = 0;
 unsigned long firstPartialAfterFullTime = 0;
@@ -177,27 +221,67 @@ bool loadCurrentFont() {
 void testGlyphOutlineAccess(uint32_t codepoint) {
     Serial.println("\n=== STEP 1: Testing FT_Face Access ===");
 
-    // WORKAROUND: Access protected _font_face from TFT_eSPI
-    // We need to extract FT_Face from M5EPD_Canvas which inherits from TFT_eSPI
-    // The _font_face member is protected, so we use a memory layout trick
+    // Get FT_Face from protected member via external symbol access
+    FT_Face face = getFontFaceFromCanvas();
+    if (!face) {
+        Serial.println("ERROR: FT_Face is NULL (font not loaded?)");
+        return;
+    }
 
-    // TFT_eSPI has a static font_face_t _font_face member
-    // We can access it via pointer arithmetic (HACK but works without library mod)
+    Serial.printf("✓ FT_Face accessed successfully!\n");
+    Serial.printf("  Font family: %s\n", face->family_name);
+    Serial.printf("  Font style: %s\n", face->style_name);
+    Serial.printf("  Num glyphs in font: %ld\n", face->num_glyphs);
 
-    // Alternative: Try to get it through public methods first
-    // canvas.loadFont() loads the font into _font_face, but doesn't expose it
+    // Load the glyph for the current codepoint
+    FT_UInt glyph_index = FT_Get_Char_Index(face, codepoint);
+    if (glyph_index == 0) {
+        Serial.printf("WARNING: Glyph U+%04X not found in font\n", codepoint);
+        return;
+    }
 
-    // For now, let's try to call FreeType functions directly
-    // We'll need the FT_Face pointer which is inside canvas object
+    Serial.printf("  Glyph index for U+%04X: %u\n", codepoint, glyph_index);
 
-    // TEMPORARY TEST: Just verify we can include FreeType headers
-    Serial.println("FreeType headers included successfully");
-    Serial.printf("Testing with codepoint: U+%04X\n", codepoint);
+    // Load glyph with FT_LOAD_NO_SCALE to get raw outline data
+    FT_Error error = FT_Load_Glyph(face, glyph_index, FT_LOAD_NO_SCALE);
+    if (error) {
+        Serial.printf("ERROR: Failed to load glyph (error %d)\n", error);
+        return;
+    }
 
-    // TODO: Next step will be to actually access FT_Face
-    // For now, this is just a compilation test
+    // Check if glyph has outline data
+    if (face->glyph->format != FT_GLYPH_FORMAT_OUTLINE) {
+        Serial.printf("WARNING: Glyph is not outline format (format=%c%c%c%c)\n",
+                     (face->glyph->format >> 24) & 0xFF,
+                     (face->glyph->format >> 16) & 0xFF,
+                     (face->glyph->format >> 8) & 0xFF,
+                     face->glyph->format & 0xFF);
+        return;
+    }
 
-    Serial.println("=== STEP 1: Compilation test PASSED ===\n");
+    // Access outline data
+    FT_Outline* outline = &face->glyph->outline;
+
+    Serial.printf("\n✓ Glyph U+%04X outline data:\n", codepoint);
+    Serial.printf("  Contours: %d\n", outline->n_contours);
+    Serial.printf("  Points: %d\n", outline->n_points);
+    Serial.printf("  Flags available: %s\n", outline->flags ? "yes" : "no");
+
+    // Show first few points as proof
+    if (outline->n_points > 0) {
+        Serial.println("\n  First 5 points (raw font units):");
+        int max_points = outline->n_points < 5 ? outline->n_points : 5;
+        for (int i = 0; i < max_points; i++) {
+            char point_type = (outline->tags[i] & FT_CURVE_TAG_ON) ? 'O' : 'C'; // O=on-curve, C=control
+            Serial.printf("    [%d] (%ld, %ld) [%c]\n",
+                         i,
+                         outline->points[i].x,
+                         outline->points[i].y,
+                         point_type);
+        }
+    }
+
+    Serial.println("\n=== STEP 1: FT_Face Access SUCCESS! ===\n");
 }
 
 // Generate random glyph codepoint from common ranges
