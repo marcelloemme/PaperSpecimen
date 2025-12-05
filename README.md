@@ -1,57 +1,117 @@
 # PaperSpecimen
 
-Font glyph viewer per M5Paper - Visualizza e confronta glifi da font TrueType/OpenType con rendering anti-aliased di alta qualità.
+**Font specimen viewer for M5Paper e-ink display**
 
-## Setup MicroSD
+Visualize TrueType/OpenType glyphs in high-quality anti-aliased bitmap or detailed vector outline mode with Bézier construction lines. Toggle between modes, explore Unicode ranges, auto-scale glyphs, and enjoy weeks of battery life with deep sleep.
 
-1. **Formatta la microSD in FAT32**
-2. **Crea la cartella** `/fonts` nella root della SD
-3. **Copia i tuoi font** (`.ttf` o `.otf`) nella cartella `/fonts`
+![M5Paper Display](https://m5stack.oss-cn-shenzhen.aliyuncs.com/image/m5-docs_homepage/core/m5paper_01.webp)
 
-Esempio struttura:
+## Features
+
+### Dual Rendering Modes
+
+**Bitmap Mode** (default)
+- Custom FreeType rendering with 16-level grayscale anti-aliasing
+- Smooth, high-quality glyph visualization
+- Per-glyph scaling to 400px target size
+
+**Outline Mode** (long press center button)
+- Vector outline visualization with control points
+- On-curve points: filled black circles
+- Off-curve points: hollow circles (Bézier control points)
+- Construction lines: dashed black lines showing curve structure
+- Gray outline showing the final glyph shape
+
+### Smart Display Management
+
+- **Per-glyph scaling**: Each glyph scales independently to fill screen optimally (400px max)
+- **Smart refresh**: Partial refresh for speed, automatic full refresh every 5 updates or 10 seconds
+- **Ghosting prevention**: Initial full refresh on boot to clear screen artifacts
+- **Unicode exploration**: Random glyph selection from 14 common Unicode ranges
+
+### Power Management
+
+- **Deep sleep**: Automatic sleep after 10 seconds of inactivity
+- **Auto-wake**: Wake every 15 minutes, display random font + glyph
+- **Manual wake**: Press center button to wake and restore previous state
+- **Ultra-low power**: WiFi and Bluetooth disabled, weeks of battery life
+- **Low battery alert**: Warning at 5% battery, automatic shutdown
+
+## Hardware Requirements
+
+- **Device**: M5Paper (ESP32-based, not S3)
+- **Display**: 960×540 4.7" e-ink, 16 grayscale levels
+- **MicroSD**: FAT32 formatted with `/fonts` directory
+- **Fonts**: TrueType (.ttf) or OpenType (.otf) files
+
+## Setup
+
+### 1. Prepare MicroSD Card
+
+1. Format microSD card as **FAT32**
+2. Create `/fonts` directory in root
+3. Copy your `.ttf` or `.otf` font files into `/fonts`
+
+Example structure:
 ```
 /
 └── fonts/
     ├── Helvetica-Regular.ttf
     ├── Helvetica-Bold.ttf
-    ├── TimesNewRoman.ttf
-    └── YourFont.ttf
+    ├── Arial.ttf
+    └── YourFont.otf
 ```
 
-## Controlli
+### 2. Flash Firmware
 
-### Rotella Laterale
-- **Su (BtnR)**: Font successivo (mantiene stesso glifo)
-- **Giù (BtnL)**: Font precedente (mantiene stesso glifo)
+**Using PlatformIO:**
+```bash
+pio run --target upload
+```
 
-### Rotella Centrale
-- **Pressione (BtnP)**: Glifo casuale (mantiene stesso font)
+**Using pre-compiled binary:**
+```bash
+esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x10000 firmware.bin
+```
 
-## Funzionalità
+### 3. Insert SD Card and Power On
 
-### Display
-- **Orientamento**: Verticale (540x960)
-- **Qualità rendering**: 16 livelli di grigio con anti-aliasing
-- **Dimensione glifi**: 250px per massima leggibilità
+The device will:
+1. Show boot screen
+2. Scan for fonts in `/fonts`
+3. Display first random glyph in bitmap mode
+4. Perform full refresh to clear ghosting
 
-### Refresh Intelligente
-- **Partial refresh** (UPDATE_MODE_GL16): rendering normale veloce
-- **Full refresh** (UPDATE_MODE_GC16): automatico dopo:
-  - 5 partial refresh E almeno 10 secondi trascorsi
-  - Oppure 10 secondi trascorsi (anche con <5 partial)
-- Permette uso rapido senza flickering eccessivo
+## Controls
 
-### Info Visualizzate
-- **Glifo**: Centrato a schermo, dimensione grande
-- **Nome font**: In basso (es. "Helvetica-Bold")
-- **Codepoint Unicode**: In basso (es. "U+0041")
-- **Posizione font**: Angolo basso-destra (es. "2/5")
+| Button | Action |
+|--------|--------|
+| **Wheel UP** (BtnR) | Next font (keeps same glyph) |
+| **Wheel DOWN** (BtnL) | Previous font (keeps same glyph) |
+| **Wheel SHORT PRESS** (BtnP) | Random glyph (keeps same font) |
+| **Wheel LONG PRESS** (BtnP, ≥800ms) | Toggle bitmap ↔ outline mode |
 
-### Unicode Ranges Supportati
-Il generatore random seleziona glifi da 14 ranges Unicode comuni:
+## Display Information
+
+**On-screen labels:**
+- **Top**: Font name (e.g., "Helvetica-Bold")
+- **Bottom**: Unicode codepoint (e.g., "U+0041")
+- **Bottom-right**: Font position (e.g., "2/5")
+
+**Serial output** (115200 baud):
+- Font list on startup
+- Current font and glyph
+- Glyph changes with Unicode range info
+- Refresh type (partial/full) per update
+- Outline parsing details (segments, points, curves)
+
+## Unicode Ranges
+
+Random glyph selection includes these ranges:
+
 - Basic Latin (ASCII)
+- Latin-1 Supplement (accented characters)
 - Latin Extended A/B
-- Latin-1 Supplement (caratteri accentati)
 - General Punctuation
 - Currency Symbols
 - Letterlike Symbols
@@ -63,77 +123,171 @@ Il generatore random seleziona glifi da 14 ranges Unicode comuni:
 - Block Elements
 - Geometric Shapes
 
-## Compilazione & Upload
+## Technical Specifications
 
-### Compilare
+### Memory Usage
+- **Flash**: 85.2% (1,116,661 / 1,310,720 bytes)
+- **RAM**: 1.3% (57,820 / 4,521,984 bytes)
+- **PSRAM**: Used for large glyph rendering
+
+### Display Configuration
+- **Orientation**: Vertical (540×960)
+- **Rendering**: 16 grayscale levels (4-bit per pixel)
+- **Target glyph size**: 400px (auto-scaled per glyph)
+- **Refresh modes**:
+  - `UPDATE_MODE_GL16`: Fast partial refresh
+  - `UPDATE_MODE_GC16`: Full refresh (ghosting removal)
+
+### Power Optimization
+- WiFi disabled
+- Bluetooth disabled
+- Touchscreen not initialized
+- External sensors (SHT30) powered down
+- Only physical buttons active
+- Deep sleep between interactions
+
+## Building from Source
+
+### Requirements
+- [PlatformIO](https://platformio.org/)
+- ESP32 toolchain (installed automatically by PlatformIO)
+
+### Dependencies
+- M5EPD @ 0.1.5 (includes FreeType for TTF rendering)
+- SD @ 2.0.0
+- WiFi @ 2.0.0
+
+### Build Commands
+
+**Compile:**
 ```bash
 pio run
 ```
 
-### Upload su M5Paper
+**Upload:**
 ```bash
 pio run --target upload
 ```
 
-### Monitor Seriale (debug)
+**Serial monitor:**
 ```bash
 pio device monitor -b 115200
 ```
 
-## Specifiche Tecniche
-
-### Hardware
-- **Device**: M5Paper (ESP32, non S3)
-- **Display**: 960x540 4.7" e-ink, 16 grayscale levels
-- **Board**: m5stack-core-esp32
-
-### Memoria
-- **Flash**: 82.3% utilizzato (1078749 / 1310720 bytes)
-- **RAM**: 15.1% utilizzato (49624 / 327680 bytes)
-- Ottimo margine per font di grandi dimensioni grazie a PSRAM
-
-### Risparmio Energetico
-- WiFi disabilitato
-- Bluetooth disabilitato
-- Touchscreen non inizializzato
-- Solo pulsanti fisici attivi
-
-## Risoluzione Problemi
+## Troubleshooting
 
 ### "SD CARD ERROR"
-- Verifica che la microSD sia inserita correttamente
-- Assicurati che sia formattata in FAT32
-- Prova a riformattare la SD
+- Verify microSD is inserted correctly
+- Ensure card is formatted as FAT32
+- Try reformatting the card
 
 ### "NO FONTS FOUND"
-- Verifica che i font siano nella cartella `/fonts`
-- Controlla che abbiano estensione `.ttf` o `.otf`
-- I nomi file sono case-insensitive (TTF/ttf funzionano entrambi)
+- Check fonts are in `/fonts` directory
+- Verify files have `.ttf` or `.otf` extension
+- File names are case-insensitive (TTF/ttf both work)
 
 ### "FONT LOAD ERROR"
-- Il font potrebbe essere corrotto
-- Prova con un altro font per verificare
-- Alcuni font molto complessi potrebbero non caricarsi
+- Font file may be corrupted
+- Try a different font to verify
+- Some complex fonts may fail to load
 
-### Ghosting sul Display
-- Il firmware fa automaticamente full refresh ogni 10 secondi
-- Se vedi troppo ghosting, attendi il prossimo refresh automatico
-- Il ghosting è normale per e-ink dopo molti partial updates
+### Display Ghosting
+- Firmware automatically does full refresh every 10 seconds
+- If excessive ghosting occurs, wait for next automatic refresh
+- Some ghosting is normal for e-ink after many partial updates
 
-## Output Seriale (Debug)
+### Deep Sleep Not Working
+- Check serial output for sleep messages
+- Ensure no button is stuck pressed
+- Verify 10 second timeout has elapsed since last full refresh
 
-Connetti il monitor seriale (115200 baud) per vedere:
-- Lista font trovati all'avvio
-- Font caricato correntemente
-- Ogni cambio glifo con codepoint e range Unicode
-- Tipo di refresh (partial/full) ad ogni update
+## Architecture
 
-## Crediti
+### Custom Bitmap Rendering
+Instead of using M5EPD's built-in text rendering, PaperSpecimen implements custom FreeType bitmap rendering:
+
+1. Load glyph with `FT_Load_Glyph()`
+2. Calculate bounding box from outline
+3. Compute pixel size for 400px target: `(target_size × units_per_EM) / max_glyph_dimension`
+4. Render with `FT_LOAD_RENDER` (8-bit grayscale)
+5. Convert 8bpp → 4bpp for M5EPD
+6. Draw pixel-by-pixel on canvas
+
+**Benefits:**
+- Per-glyph scaling (small glyphs become larger)
+- Identical dimensions between bitmap and outline modes
+- Full control over rendering pipeline
+
+### Outline Mode Implementation
+
+**Step 1**: Access protected `FT_Face` via external symbol linkage
+```cpp
+extern font_face_t _ZN8TFT_eSPI10_font_faceE;
+FT_Face face = _ZN8TFT_eSPI10_font_faceE.ft_face;
+```
+
+**Step 2**: Decompose outline with FreeType callbacks
+- `outlineMoveTo`: Start new contour
+- `outlineLineTo`: Straight line segment
+- `outlineConicTo`: Quadratic Bézier (TrueType)
+- `outlineCubicTo`: Cubic Bézier (PostScript/OpenType)
+
+**Step 3**: Render outline with line approximation
+- Lines: Direct `drawLine()`
+- Quadratic Bézier: 10-step approximation
+- Cubic Bézier: 15-step approximation
+
+**Step 4**: Draw control points
+- On-curve: Filled circles (4px radius)
+- Off-curve: Hollow circles (4px outer, 3px inner)
+
+**Step 7**: Construction lines (dashed)
+- Connect control points to anchor points
+- Pattern: 10px on, 5px off
+- Color: Black (15) for visibility against gray outline (12)
+
+### State Persistence (RTC Memory)
+
+State survives deep sleep via ESP32 RTC memory:
+```cpp
+RTC_DATA_ATTR struct {
+    bool isValid;
+    int currentFontIndex;
+    uint32_t currentGlyphCodepoint;
+    ViewMode viewMode;  // BITMAP or OUTLINE
+} rtcState;
+```
+
+## Development Timeline
+
+- **Step 1**: FT_Face access via external symbol hack
+- **Step 2**: Outline decomposition with FreeType callbacks
+- **Step 3**: Basic outline rendering with centering
+- **Step 4**: Control point visualization (on-curve/off-curve)
+- **Step 5**: Bitmap/outline toggle with long press + RTC persistence
+- **Step 5.1**: Per-glyph scaling for both modes
+- **Step 7**: Construction lines with dashed pattern
+
+## Credits
 
 - **Hardware**: M5Stack M5Paper
-- **Librerie**: M5EPD (include FreeType per rendering TTF)
+- **Libraries**: M5EPD (includes FreeType for TTF rendering)
 - **Framework**: Arduino ESP32 via PlatformIO
+- **Development**: Built with [Claude Code](https://claude.com/claude-code)
 
-## Licenza
+## License
 
-Codice progetto: usa come preferisci
+MIT License - use as you prefer
+
+## Contributing
+
+Issues and pull requests welcome! Especially interested in:
+- Additional Unicode range support
+- Performance optimizations
+- Alternative rendering modes
+- Font metadata display
+- Multi-glyph comparison view
+
+---
+
+**Enjoy exploring typography on e-ink!** 📖✨
