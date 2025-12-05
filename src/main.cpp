@@ -853,15 +853,17 @@ void renderGlyphBitmap() {
 
     // Target size: 375px (scale each glyph to fill screen optimally)
     float target_size = 375.0f;
-    float scale_factor = target_size / (width > height ? width : height);
 
-    // Calculate pixel size needed
-    int pixel_size = (int)(scale_factor * face->units_per_EM / 64.0f);
+    // Calculate pixel size needed to achieve target_size
+    // Formula: pixel_size = (target_size * units_per_EM) / max_glyph_dimension
+    float max_dim = (width > height ? width : height);
+    int pixel_size = (int)((target_size * face->units_per_EM) / max_dim);
+
     if (pixel_size < 1) pixel_size = 1;
     if (pixel_size > 500) pixel_size = 500; // Safety limit
 
-    Serial.printf("Glyph bbox: w=%.1f h=%.1f, scale=%.4f, pixel_size=%d\n",
-                  width, height, scale_factor, pixel_size);
+    Serial.printf("Glyph bbox: w=%.1f h=%.1f, units_per_EM=%d, pixel_size=%d\n",
+                  width, height, face->units_per_EM, pixel_size);
 
     // Set pixel size and load glyph for rendering
     error = FT_Set_Pixel_Sizes(face, 0, pixel_size);
