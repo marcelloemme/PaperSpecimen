@@ -67,12 +67,19 @@ unsigned long lastFullRefreshTime = 0;
 unsigned long lastButtonActivityTime = 0;
 const unsigned long DEEP_SLEEP_TIMEOUT_MS = 10000; // 10 seconds from last full refresh
 
+// View mode enumeration
+enum ViewMode {
+    BITMAP,    // Normal bitmap rendering (v1.0 style)
+    OUTLINE    // Vector outline with points (v2.0)
+};
+
 // RTC memory structure to persist state across deep sleep
 RTC_DATA_ATTR struct {
     bool isValid;
     int currentFontIndex;
     uint32_t currentGlyphCodepoint;
-} rtcState = {false, 0, 0x0041};
+    ViewMode viewMode;  // STEP 5: Persist view mode across sleep
+} rtcState = {false, 0, 0x0041, BITMAP};  // Default: BITMAP mode
 
 // Font management
 std::vector<String> fontPaths;
@@ -82,6 +89,9 @@ bool fontLoaded = false;
 // Glyph rendering
 const int GLYPH_SIZE = 375; // Balanced size for specimen display
 uint32_t currentGlyphCodepoint = 0x0041; // Start with 'A'
+
+// STEP 5: Current view mode
+ViewMode currentViewMode = BITMAP;  // Start in bitmap mode (v1.0 default)
 
 // Unicode ranges for random glyph selection
 struct UnicodeRange {
@@ -801,9 +811,8 @@ String codepointToString(uint32_t codepoint) {
     return result;
 }
 
-// Render current glyph
-// STEP 3: Temporarily disabled - using renderGlyphOutline() instead
-void renderGlyph_DISABLED() {
+// Render current glyph (bitmap mode - v1.0 style)
+void renderGlyphBitmap() {
     if (!fontLoaded) {
         Serial.println("ERROR: No font loaded");
         return;
@@ -879,6 +888,18 @@ void renderGlyph_DISABLED() {
                   glyphStr.c_str(), currentGlyphCodepoint, fontName.c_str());
 }
 
+// ========================================
+// STEP 5: Unified Render Function (chooses bitmap or outline)
+// ========================================
+
+void renderGlyph() {
+    if (currentViewMode == BITMAP) {
+        renderGlyphBitmap();
+    } else {
+        renderGlyphOutline();
+    }
+}
+
 // Change to next font
 void nextFont() {
     if (fontPaths.empty()) return;
@@ -887,7 +908,7 @@ void nextFont() {
     Serial.printf("Switching to font %d/%d\n", currentFontIndex + 1, fontPaths.size());
 
     if (loadCurrentFont()) {
-        renderGlyphOutline();
+        renderGlyph();
     }
 }
 
@@ -902,7 +923,7 @@ void previousFont() {
     Serial.printf("Switching to font %d/%d\n", currentFontIndex + 1, fontPaths.size());
 
     if (loadCurrentFont()) {
-        renderGlyphOutline();
+        renderGlyph();
     }
 }
 
@@ -911,7 +932,7 @@ void randomGlyph() {
     if (!fontLoaded) return;
 
     currentGlyphCodepoint = getRandomGlyphCodepoint();
-    renderGlyphOutline();
+    renderGlyph();
 }
 
 // Change to random font AND random glyph (used for auto-wake)
@@ -925,7 +946,7 @@ void randomFont() {
     // Load the font and generate random glyph
     if (loadCurrentFont()) {
         currentGlyphCodepoint = getRandomGlyphCodepoint();
-        renderGlyphOutline();
+        renderGlyph();
     }
 }
 
@@ -1001,8 +1022,10 @@ void enterDeepSleep() {
     rtcState.isValid = true;
     rtcState.currentFontIndex = currentFontIndex;
     rtcState.currentGlyphCodepoint = currentGlyphCodepoint;
-    Serial.printf("State saved: font=%d, glyph=U+%04X\n",
-                  rtcState.currentFontIndex, rtcState.currentGlyphCodepoint);
+    rtcState.viewMode = currentViewMode;  // STEP 5: Save view mode
+    Serial.printf("State saved: font=%d, glyph=U+%04X, mode=%s\n",
+                  rtcState.currentFontIndex, rtcState.currentGlyphCodepoint,
+                  currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
 
     // Put display controller in standby
     M5.EPD.StandBy();
@@ -1190,8 +1213,12 @@ void setup() {
 
     // Handle wake from sleep scenarios
     if (isWakeFromSleep && rtcState.isValid) {
+        // STEP 5: Restore view mode from RTC memory
+        currentViewMode = rtcState.viewMode;
+        Serial.printf("Restored view mode: %s\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+
         if (isAutoWake) {
-            // Auto-wake from RTC alarm: randomize BOTH font and glyph
+            // Auto-wake from RTC alarm: randomize BOTH font and glyph (keep view mode)
             Serial.println("\n=== Auto-wake: Generating random font + glyph ===");
             randomFont(); // This loads random font and random glyph
         } else {
@@ -1211,7 +1238,7 @@ void setup() {
 
             // Load the font and render the glyph
             if (loadCurrentFont()) {
-                renderGlyphOutline();
+                renderGlyph();
             } else {
                 Serial.println("ERROR: Failed to restore font");
             }
@@ -1221,7 +1248,7 @@ void setup() {
         Serial.println("\n=== Loading initial font ===");
         if (loadCurrentFont()) {
             currentGlyphCodepoint = getRandomGlyphCodepoint();
-            renderGlyphOutline();
+            renderGlyph();
 
             // STEP 1 TEST: Try to access FT_Face outline data
             testGlyphOutlineAccess(currentGlyphCodepoint);
@@ -1289,11 +1316,36 @@ void loop() {
         delay(300); // Simple delay to prevent multiple triggers
     }
 
-    // Button P (Wheel PUSH): Random glyph (same font)
-    if (M5.BtnP.wasPressed()) {
+    // STEP 5: Button P - Long press = toggle view, Short press = random glyph
+    static unsigned long btnPressStartTime = 0;
+    static bool btnPWasDown = false;
+    const unsigned long LONG_PRESS_THRESHOLD = 800; // 800ms for long press
+
+    if (M5.BtnP.isPressed() && !btnPWasDown) {
+        // Button just pressed
+        btnPressStartTime = millis();
+        btnPWasDown = true;
+    }
+
+    if (!M5.BtnP.isPressed() && btnPWasDown) {
+        // Button just released
+        unsigned long pressDuration = millis() - btnPressStartTime;
+        btnPWasDown = false;
         lastButtonActivityTime = millis();
-        Serial.println("\n>>> Button P (PUSH) pressed - Random glyph");
-        randomGlyph();
+
+        if (pressDuration >= LONG_PRESS_THRESHOLD) {
+            // Long press: Toggle view mode
+            Serial.println("\n>>> Button P LONG PRESS - Toggle view mode");
+            currentViewMode = (currentViewMode == BITMAP) ? OUTLINE : BITMAP;
+            Serial.printf("Switched to %s mode\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+
+            // Re-render with new mode
+            renderGlyph();
+        } else {
+            // Short press: Random glyph
+            Serial.println("\n>>> Button P (PUSH) pressed - Random glyph");
+            randomGlyph();
+        }
         delay(300); // Simple delay to prevent multiple triggers
     }
 
