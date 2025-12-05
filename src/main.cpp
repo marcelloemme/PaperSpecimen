@@ -4,9 +4,12 @@
 #include <vector>
 #include <esp_sleep.h>
 
-// FreeType headers for outline access
+// FreeType headers for outline access and bitmap rendering
 #include "freetype/freetype.h"
 #include "freetype/ftoutln.h"
+#include "freetype/ftglyph.h"
+#include "freetype/ftbitmap.h"
+#include <esp_heap_caps.h>
 
 // Canvas for rendering
 M5EPD_Canvas canvas(&M5.EPD);  // Single full screen canvas for everything
@@ -559,26 +562,22 @@ bool parseGlyphOutline(uint32_t codepoint) {
 
     FT_Outline* outline = &face->glyph->outline;
 
-    // STEP 5.1: Use font metrics instead of glyph bbox for consistent scaling with bitmap mode
-    // This ensures an apostrophe stays small and a capital letter stays large, just like bitmap
+    // Calculate bounding box for scaling
+    FT_BBox bbox;
+    FT_Outline_Get_CBox(outline, &bbox);
 
-    float font_height = face->ascender - face->descender;  // Total font height in font units
-    float units_per_em = face->units_per_EM;
+    float width = bbox.xMax - bbox.xMin;
+    float height = bbox.yMax - bbox.yMin;
 
-    // Target size: 250px (matching bitmap mode)
-    float target_size = 250.0f;
-
-    // Scale based on font metrics, not individual glyph bbox
-    float scale = target_size / font_height;
+    // Target size: 375px (scale each glyph to fill screen optimally)
+    float target_size = 375.0f;
+    float scale = target_size / (width > height ? width : height);
 
     // Center on display (540x960 vertical)
     int centerX = 270;
     int centerY = 480;
 
-    // Calculate glyph bbox for centering (we still need this for positioning)
-    FT_BBox bbox;
-    FT_Outline_Get_CBox(outline, &bbox);
-
+    // Calculate center of glyph bounding box
     float bbox_center_x = (bbox.xMin + bbox.xMax) / 2.0f;
     float bbox_center_y = (bbox.yMin + bbox.yMax) / 2.0f;
 
@@ -815,63 +814,129 @@ String codepointToString(uint32_t codepoint) {
     return result;
 }
 
-// Render current glyph (bitmap mode - v1.0 style)
+// Render current glyph (bitmap mode - custom FreeType rendering)
 void renderGlyphBitmap() {
     if (!fontLoaded) {
         Serial.println("ERROR: No font loaded");
         return;
     }
 
-    // STRATEGY: Single canvas with mixed fonts
-    //           - Built-in font for labels (top/bottom)
-    //           - TTF font for main glyph (center)
+    Serial.println("\n=== Custom Bitmap Rendering ===");
 
+    // Get FreeType face
+    FT_Face face = getFontFaceFromCanvas();
+
+    if (!face) {
+        Serial.println("ERROR: FT_Face not available");
+        return;
+    }
+
+    // Load glyph with no scaling to get metrics
+    FT_UInt glyph_index = FT_Get_Char_Index(face, currentGlyphCodepoint);
+    if (glyph_index == 0) {
+        Serial.printf("WARNING: Glyph U+%04X not found\n", currentGlyphCodepoint);
+        return;
+    }
+
+    FT_Error error = FT_Load_Glyph(face, glyph_index, FT_LOAD_NO_SCALE);
+    if (error) {
+        Serial.printf("ERROR: Failed to load glyph (error %d)\n", error);
+        return;
+    }
+
+    // Calculate bounding box
+    FT_BBox bbox;
+    FT_Outline_Get_CBox(&face->glyph->outline, &bbox);
+
+    float width = bbox.xMax - bbox.xMin;
+    float height = bbox.yMax - bbox.yMin;
+
+    // Target size: 375px (scale each glyph to fill screen optimally)
+    float target_size = 375.0f;
+    float scale_factor = target_size / (width > height ? width : height);
+
+    // Calculate pixel size needed
+    int pixel_size = (int)(scale_factor * face->units_per_EM / 64.0f);
+    if (pixel_size < 1) pixel_size = 1;
+    if (pixel_size > 500) pixel_size = 500; // Safety limit
+
+    Serial.printf("Glyph bbox: w=%.1f h=%.1f, scale=%.4f, pixel_size=%d\n",
+                  width, height, scale_factor, pixel_size);
+
+    // Set pixel size and load glyph for rendering
+    error = FT_Set_Pixel_Sizes(face, 0, pixel_size);
+    if (error) {
+        Serial.printf("ERROR: Failed to set pixel size (error %d)\n", error);
+        return;
+    }
+
+    error = FT_Load_Glyph(face, glyph_index, FT_LOAD_RENDER);
+    if (error) {
+        Serial.printf("ERROR: Failed to render glyph (error %d)\n", error);
+        return;
+    }
+
+    FT_Bitmap* bitmap = &face->glyph->bitmap;
+
+    Serial.printf("Bitmap: %dx%d, pitch=%d, mode=%d\n",
+                  bitmap->width, bitmap->rows, bitmap->pitch, bitmap->pixel_mode);
+
+    // Clear canvas
+    canvas.fillCanvas(0); // 0 = white
+
+    // Calculate centering
     int centerX = 270;
     int centerY = 480;
+    int draw_x = centerX - bitmap->width / 2;
+    int draw_y = centerY - bitmap->rows / 2;
 
-    // Clear canvas - white background
-    canvas.fillCanvas(0); // 0 = white (inverted on e-paper)
+    // Draw bitmap on canvas (convert 8bpp grayscale to 4bpp)
+    for (unsigned int y = 0; y < bitmap->rows; y++) {
+        for (unsigned int x = 0; x < bitmap->width; x++) {
+            unsigned char gray8 = bitmap->buffer[y * bitmap->pitch + x];
 
+            // Convert 8bpp (0-255) to 4bpp (0-15)
+            // 0 = white, 15 = black in M5EPD
+            unsigned char gray4 = (gray8 * 15) / 255;
+
+            int screen_x = draw_x + x;
+            int screen_y = draw_y + y;
+
+            // Bounds check
+            if (screen_x >= 0 && screen_x < 540 && screen_y >= 0 && screen_y < 960) {
+                canvas.drawPixel(screen_x, screen_y, gray4);
+            }
+        }
+    }
+
+    // Draw labels
     String fontName = getFontName(fontPaths[currentFontIndex]);
     char codepointStr[32];
     sprintf(codepointStr, "U+%04X", currentGlyphCodepoint);
 
-    // Draw top label with TTF font (small size)
     canvas.setTextSize(24);
-    canvas.setTextColor(15); // 15 = black (inverted on e-paper)
-    canvas.setTextDatum(TC_DATUM); // Top-center
+    canvas.setTextColor(15);
+    canvas.setTextDatum(TC_DATUM);
     canvas.drawString(fontName, centerX, 30);
 
-    // Draw main glyph with TTF font (center)
-    canvas.setTextSize(GLYPH_SIZE);
-    canvas.setTextColor(15); // 15 = black (inverted on e-paper)
-    canvas.setTextDatum(CC_DATUM); // Center-center alignment
-
-    String glyphStr = codepointToString(currentGlyphCodepoint);
-    canvas.drawString(glyphStr, centerX, centerY);
-
-    // Draw bottom label with TTF font (small size)
     canvas.setTextSize(24);
-    canvas.setTextColor(15); // 15 = black (inverted on e-paper)
-    canvas.setTextDatum(BC_DATUM); // Bottom-center
+    canvas.setTextColor(15);
+    canvas.setTextDatum(BC_DATUM);
     canvas.drawString(codepointStr, centerX, 930);
 
-    // Push entire canvas to display
+    // Push to display
     canvas.pushCanvas(0, 0, UPDATE_MODE_GL16);
 
-    // Track first partial after full refresh to start 10s timer
+    // Track first partial after full refresh
     if (!hasPartialSinceLastFull) {
         firstPartialAfterFullTime = millis();
         hasPartialSinceLastFull = true;
         Serial.println("First partial after full - starting 10s timer");
     }
 
-    // Track refresh counts
     partialRefreshCount++;
 
-    // Trigger full refresh if:
-    // A) 5 partials reached, OR
-    // B) 10 seconds passed since FIRST partial AND at least 1 partial happened
+    // Trigger full refresh if needed
     unsigned long timeSinceFirstPartial = millis() - firstPartialAfterFullTime;
     if (partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL ||
         (hasPartialSinceLastFull && timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS)) {
@@ -880,16 +945,13 @@ void renderGlyphBitmap() {
                       partialRefreshCount, timeSinceFirstPartial);
         M5.EPD.UpdateFull(UPDATE_MODE_GC16);
 
-        // Reset all counters
         partialRefreshCount = 0;
         hasPartialSinceLastFull = false;
-
-        // Track last full refresh for power management
         lastFullRefreshTime = millis();
     }
 
-    Serial.printf("Rendered: %s (U+%04X) with font %s\n",
-                  glyphStr.c_str(), currentGlyphCodepoint, fontName.c_str());
+    Serial.printf("Rendered bitmap: U+%04X with font %s\n",
+                  currentGlyphCodepoint, fontName.c_str());
 }
 
 // ========================================
