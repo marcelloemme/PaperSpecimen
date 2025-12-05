@@ -4,6 +4,10 @@
 #include <vector>
 #include <esp_sleep.h>
 
+// FreeType headers for outline access
+#include "freetype/freetype.h"
+#include "freetype/ftoutln.h"
+
 // Canvas for rendering
 M5EPD_Canvas canvas(&M5.EPD);  // Single full screen canvas for everything
 
@@ -163,6 +167,37 @@ bool loadCurrentFont() {
     fontLoaded = true;
     Serial.println("=== Font loaded successfully! ===\n");
     return true;
+}
+
+// ========================================
+// STEP 1: FT_Face Access Test (Proof of Concept)
+// ========================================
+
+// Test function to access FT_Face and print glyph outline info
+void testGlyphOutlineAccess(uint32_t codepoint) {
+    Serial.println("\n=== STEP 1: Testing FT_Face Access ===");
+
+    // WORKAROUND: Access protected _font_face from TFT_eSPI
+    // We need to extract FT_Face from M5EPD_Canvas which inherits from TFT_eSPI
+    // The _font_face member is protected, so we use a memory layout trick
+
+    // TFT_eSPI has a static font_face_t _font_face member
+    // We can access it via pointer arithmetic (HACK but works without library mod)
+
+    // Alternative: Try to get it through public methods first
+    // canvas.loadFont() loads the font into _font_face, but doesn't expose it
+
+    // For now, let's try to call FreeType functions directly
+    // We'll need the FT_Face pointer which is inside canvas object
+
+    // TEMPORARY TEST: Just verify we can include FreeType headers
+    Serial.println("FreeType headers included successfully");
+    Serial.printf("Testing with codepoint: U+%04X\n", codepoint);
+
+    // TODO: Next step will be to actually access FT_Face
+    // For now, this is just a compilation test
+
+    Serial.println("=== STEP 1: Compilation test PASSED ===\n");
 }
 
 // Generate random glyph codepoint from common ranges
@@ -640,6 +675,9 @@ void setup() {
         if (loadCurrentFont()) {
             currentGlyphCodepoint = getRandomGlyphCodepoint();
             renderGlyph();
+
+            // STEP 1 TEST: Try to access FT_Face outline data
+            testGlyphOutlineAccess(currentGlyphCodepoint);
         } else {
             Serial.println("ERROR: Failed to load initial font");
             canvas.fillCanvas(15);
