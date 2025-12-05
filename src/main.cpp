@@ -627,9 +627,9 @@ void drawDashedLine(float x1, float y1, float x2, float y2, uint8_t color) {
     dx /= length;
     dy /= length;
 
-    // Dash pattern: 5 pixels on, 3 pixels off
-    float dash_length = 5.0f;
-    float gap_length = 3.0f;
+    // Dash pattern: 10 pixels on, 5 pixels off (longer for better visibility)
+    float dash_length = 10.0f;
+    float gap_length = 5.0f;
     float pattern_length = dash_length + gap_length;
 
     float distance = 0.0f;
@@ -685,7 +685,7 @@ void renderGlyphOutline() {
                 break;
 
             case SEG_LINE:
-                canvas.drawLine(curr_x, curr_y, seg.x, seg.y, 15); // 15 = black
+                canvas.drawLine(curr_x, curr_y, seg.x, seg.y, 12); // 12 = dark gray
                 curr_x = seg.x;
                 curr_y = seg.y;
                 lines_drawn++;
@@ -701,7 +701,7 @@ void renderGlyphOutline() {
                         // Quadratic Bézier: B(t) = (1-t)²P0 + 2(1-t)t·P1 + t²P2
                         float bx = u1*u1*curr_x + 2*u1*u*seg.cx + u*u*seg.x;
                         float by = u1*u1*curr_y + 2*u1*u*seg.cy + u*u*seg.y;
-                        canvas.drawLine(curr_x, curr_y, bx, by, 15);
+                        canvas.drawLine(curr_x, curr_y, bx, by, 12); // Dark gray outline
                         curr_x = bx;
                         curr_y = by;
                         lines_drawn++;
@@ -719,7 +719,7 @@ void renderGlyphOutline() {
                         // Cubic Bézier: B(t) = (1-t)³P0 + 3(1-t)²t·P1 + 3(1-t)t²P2 + t³P3
                         float bx = u1*u1*u1*curr_x + 3*u1*u1*u*seg.cx + 3*u1*u*u*seg.cx2 + u*u*u*seg.x;
                         float by = u1*u1*u1*curr_y + 3*u1*u1*u*seg.cy + 3*u1*u*u*seg.cy2 + u*u*u*seg.y;
-                        canvas.drawLine(curr_x, curr_y, bx, by, 15);
+                        canvas.drawLine(curr_x, curr_y, bx, by, 12); // Dark gray outline
                         curr_x = bx;
                         curr_y = by;
                         lines_drawn++;
@@ -758,11 +758,11 @@ void renderGlyphOutline() {
             }
 
             // Draw dashed line from start to control point
-            drawDashedLine(start_x, start_y, seg.cx, seg.cy, 8); // Gray color
+            drawDashedLine(start_x, start_y, seg.cx, seg.cy, 15); // Black for visibility
             construction_lines_drawn++;
 
             // Draw dashed line from control point to end
-            drawDashedLine(seg.cx, seg.cy, seg.x, seg.y, 8);
+            drawDashedLine(seg.cx, seg.cy, seg.x, seg.y, 15);
             construction_lines_drawn++;
 
         } else if (seg.type == SEG_CUBIC) {
@@ -780,15 +780,15 @@ void renderGlyphOutline() {
             }
 
             // Draw dashed line from start to first control point
-            drawDashedLine(start_x, start_y, seg.cx, seg.cy, 8);
+            drawDashedLine(start_x, start_y, seg.cx, seg.cy, 15);
             construction_lines_drawn++;
 
             // Draw dashed line from first control point to second control point
-            drawDashedLine(seg.cx, seg.cy, seg.cx2, seg.cy2, 8);
+            drawDashedLine(seg.cx, seg.cy, seg.cx2, seg.cy2, 15);
             construction_lines_drawn++;
 
             // Draw dashed line from second control point to end
-            drawDashedLine(seg.cx2, seg.cy2, seg.x, seg.y, 8);
+            drawDashedLine(seg.cx2, seg.cy2, seg.x, seg.y, 15);
             construction_lines_drawn++;
         }
     }
