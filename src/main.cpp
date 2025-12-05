@@ -214,7 +214,58 @@ bool loadCurrentFont() {
 }
 
 // ========================================
-// STEP 1: FT_Face Access Test (Proof of Concept)
+// STEP 2: Outline Parsing with FT_Outline_Decompose
+// ========================================
+
+// Callback context for outline decomposition
+struct OutlineDecomposeContext {
+    int segment_count;
+    int moveto_count;
+    int lineto_count;
+    int conicto_count;
+    int cubicto_count;
+};
+
+// Callback: MoveTo (start new contour)
+int outlineMoveTo(const FT_Vector* to, void* user) {
+    OutlineDecomposeContext* ctx = (OutlineDecomposeContext*)user;
+    ctx->segment_count++;
+    ctx->moveto_count++;
+    Serial.printf("  MoveTo: (%ld, %ld)\n", to->x, to->y);
+    return 0; // success
+}
+
+// Callback: LineTo (straight line segment)
+int outlineLineTo(const FT_Vector* to, void* user) {
+    OutlineDecomposeContext* ctx = (OutlineDecomposeContext*)user;
+    ctx->segment_count++;
+    ctx->lineto_count++;
+    Serial.printf("  LineTo: (%ld, %ld)\n", to->x, to->y);
+    return 0;
+}
+
+// Callback: ConicTo (quadratic Bézier curve - TrueType)
+int outlineConicTo(const FT_Vector* control, const FT_Vector* to, void* user) {
+    OutlineDecomposeContext* ctx = (OutlineDecomposeContext*)user;
+    ctx->segment_count++;
+    ctx->conicto_count++;
+    Serial.printf("  ConicTo: control=(%ld, %ld) → to=(%ld, %ld) [Quadratic Bézier]\n",
+                 control->x, control->y, to->x, to->y);
+    return 0;
+}
+
+// Callback: CubicTo (cubic Bézier curve - PostScript/OpenType)
+int outlineCubicTo(const FT_Vector* control1, const FT_Vector* control2, const FT_Vector* to, void* user) {
+    OutlineDecomposeContext* ctx = (OutlineDecomposeContext*)user;
+    ctx->segment_count++;
+    ctx->cubicto_count++;
+    Serial.printf("  CubicTo: c1=(%ld, %ld) c2=(%ld, %ld) → to=(%ld, %ld) [Cubic Bézier]\n",
+                 control1->x, control1->y, control2->x, control2->y, to->x, to->y);
+    return 0;
+}
+
+// ========================================
+// STEP 1+2: FT_Face Access and Outline Decompose Test
 // ========================================
 
 // Test function to access FT_Face and print glyph outline info
@@ -267,7 +318,7 @@ void testGlyphOutlineAccess(uint32_t codepoint) {
     Serial.printf("  Points: %d\n", outline->n_points);
     Serial.printf("  Flags available: %s\n", outline->flags ? "yes" : "no");
 
-    // Show first few points as proof
+    // Show first few points as proof (Step 1 verification)
     if (outline->n_points > 0) {
         Serial.println("\n  First 5 points (raw font units):");
         int max_points = outline->n_points < 5 ? outline->n_points : 5;
@@ -281,7 +332,54 @@ void testGlyphOutlineAccess(uint32_t codepoint) {
         }
     }
 
-    Serial.println("\n=== STEP 1: FT_Face Access SUCCESS! ===\n");
+    Serial.println("\n=== STEP 1: FT_Face Access SUCCESS! ===");
+
+    // ========================================
+    // STEP 2: Decompose outline into segments
+    // ========================================
+    Serial.println("\n=== STEP 2: Decomposing Outline ===");
+
+    // Setup callback function table
+    FT_Outline_Funcs callbacks;
+    callbacks.move_to = (FT_Outline_MoveToFunc)outlineMoveTo;
+    callbacks.line_to = (FT_Outline_LineToFunc)outlineLineTo;
+    callbacks.conic_to = (FT_Outline_ConicToFunc)outlineConicTo;
+    callbacks.cubic_to = (FT_Outline_CubicToFunc)outlineCubicTo;
+    callbacks.shift = 0;  // No coordinate shift
+    callbacks.delta = 0;  // No coordinate delta
+
+    // Context to track decomposition stats
+    OutlineDecomposeContext ctx = {0, 0, 0, 0, 0};
+
+    // Decompose outline into segments
+    Serial.printf("\nDecomposing %d contours into segments:\n", outline->n_contours);
+    Serial.println("(Coordinates in font units, not yet scaled to pixels)\n");
+
+    FT_Error decompose_error = FT_Outline_Decompose(outline, &callbacks, &ctx);
+
+    if (decompose_error) {
+        Serial.printf("ERROR: FT_Outline_Decompose failed (error %d)\n", decompose_error);
+    } else {
+        Serial.println("\n✓ Outline decomposition complete!");
+        Serial.printf("  Total segments: %d\n", ctx.segment_count);
+        Serial.printf("  - MoveTo (contour start): %d\n", ctx.moveto_count);
+        Serial.printf("  - LineTo (straight lines): %d\n", ctx.lineto_count);
+        Serial.printf("  - ConicTo (quadratic Bézier): %d\n", ctx.conicto_count);
+        Serial.printf("  - CubicTo (cubic Bézier): %d\n", ctx.cubicto_count);
+
+        // Determine font type from curve usage
+        if (ctx.conicto_count > 0 && ctx.cubicto_count == 0) {
+            Serial.println("  Font type: TrueType (quadratic Bézier curves)");
+        } else if (ctx.cubicto_count > 0 && ctx.conicto_count == 0) {
+            Serial.println("  Font type: PostScript/OpenType (cubic Bézier curves)");
+        } else if (ctx.conicto_count == 0 && ctx.cubicto_count == 0) {
+            Serial.println("  Font type: Simple polygonal outline (no curves)");
+        } else {
+            Serial.println("  Font type: Mixed (both quadratic and cubic curves - rare!)");
+        }
+    }
+
+    Serial.println("\n=== STEP 2: Outline Decompose SUCCESS! ===\n");
 }
 
 // Generate random glyph codepoint from common ranges
