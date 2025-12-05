@@ -2,9 +2,7 @@
 
 **Font specimen viewer for M5Paper e-ink display**
 
-Visualize TrueType/OpenType glyphs in high-quality anti-aliased bitmap or detailed vector outline mode with Bézier construction lines. Toggle between modes, explore Unicode ranges, auto-scale glyphs, and enjoy weeks of battery life with deep sleep.
-
-![M5Paper Display](https://m5stack.oss-cn-shenzhen.aliyuncs.com/image/m5-docs_homepage/core/m5paper_01.webp)
+Visualize TrueType glyphs in high-quality anti-aliased bitmap or detailed vector outline mode with Bézier construction lines. Toggle between modes, explore Unicode ranges, auto-scale glyphs, and enjoy weeks of battery life with deep sleep.
 
 ## Features
 
@@ -42,7 +40,7 @@ Visualize TrueType/OpenType glyphs in high-quality anti-aliased bitmap or detail
 - **Device**: M5Paper (ESP32-based, not S3)
 - **Display**: 960×540 4.7" e-ink, 16 grayscale levels
 - **MicroSD**: FAT32 formatted with `/fonts` directory
-- **Fonts**: TrueType (.ttf) or OpenType (.otf) files
+- **Fonts**: TrueType (.ttf) files only
 
 ## Setup
 
@@ -50,7 +48,8 @@ Visualize TrueType/OpenType glyphs in high-quality anti-aliased bitmap or detail
 
 1. Format microSD card as **FAT32**
 2. Create `/fonts` directory in root
-3. Copy your `.ttf` or `.otf` font files into `/fonts`
+3. Copy your `.ttf` font files into `/fonts`
+4. **Important**: If you add/remove/change fonts while the device is on, you must restart by pressing the reset button on the back, then the center side button to wake
 
 Example structure:
 ```
@@ -59,7 +58,7 @@ Example structure:
     ├── Helvetica-Regular.ttf
     ├── Helvetica-Bold.ttf
     ├── Arial.ttf
-    └── YourFont.otf
+    └── YourFont.ttf
 ```
 
 ### 2. Flash Firmware
@@ -183,8 +182,9 @@ pio device monitor -b 115200
 
 ### "NO FONTS FOUND"
 - Check fonts are in `/fonts` directory
-- Verify files have `.ttf` or `.otf` extension
+- Verify files have `.ttf` extension (only TrueType supported)
 - File names are case-insensitive (TTF/ttf both work)
+- If you added fonts while device was on, press reset button on back then center button to restart
 
 ### "FONT LOAD ERROR"
 - Font file may be corrupted

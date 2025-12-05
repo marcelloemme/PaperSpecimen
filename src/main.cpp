@@ -72,8 +72,8 @@ const unsigned long DEEP_SLEEP_TIMEOUT_MS = 10000; // 10 seconds from last full 
 
 // View mode enumeration
 enum ViewMode {
-    BITMAP,    // Normal bitmap rendering (v1.0 style)
-    OUTLINE    // Vector outline with points (v2.0)
+    BITMAP,    // Normal bitmap rendering with anti-aliasing
+    OUTLINE    // Vector outline with control points and construction lines
 };
 
 // RTC memory structure to persist state across deep sleep
@@ -94,7 +94,7 @@ const int GLYPH_SIZE = 375; // Balanced size for specimen display
 uint32_t currentGlyphCodepoint = 0x0041; // Start with 'A'
 
 // STEP 5: Current view mode
-ViewMode currentViewMode = BITMAP;  // Start in bitmap mode (v1.0 default)
+ViewMode currentViewMode = BITMAP;  // Start in bitmap mode (default)
 
 // Unicode ranges for random glyph selection
 struct UnicodeRange {
