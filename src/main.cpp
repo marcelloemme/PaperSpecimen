@@ -508,8 +508,14 @@ bool parseGlyphOutline(uint32_t codepoint) {
     int centerX = 270;
     int centerY = 480;
 
-    float offset_x = centerX - (bbox.xMin + width / 2.0f) * scale;
-    float offset_y = centerY + (bbox.yMin + height / 2.0f) * scale; // Flip Y
+    // Calculate center of glyph bounding box
+    float bbox_center_x = (bbox.xMin + bbox.xMax) / 2.0f;
+    float bbox_center_y = (bbox.yMin + bbox.yMax) / 2.0f;
+
+    // Offset to center the glyph on display
+    // Y axis is flipped (font coords increase upward, screen coords increase downward)
+    float offset_x = centerX - bbox_center_x * scale;
+    float offset_y = centerY + bbox_center_y * scale; // Flip Y axis
 
     Serial.printf("Parsing outline: scale=%.4f, offset=(%.1f, %.1f)\n", scale, offset_x, offset_y);
 
@@ -628,10 +634,44 @@ void renderGlyphOutline() {
     canvas.drawString(fontName, 270, 20);
 
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString(codepointStr, 270, 940);
+    canvas.drawString(codepointStr, 270, 930); // Match original position
 
-    // Push to display
+    // Push to display with smart refresh logic
     canvas.pushCanvas(0, 0, UPDATE_MODE_GL16);
+
+    // Track first partial after full refresh to start 10s timer
+    if (!hasPartialSinceLastFull) {
+        firstPartialAfterFullTime = millis();
+        hasPartialSinceLastFull = true;
+        Serial.println("First partial after full - starting 10s timer");
+    }
+
+    // Track refresh counts
+    partialRefreshCount++;
+
+    // Trigger full refresh if:
+    // A) 5 partials reached, OR
+    // B) 10 seconds passed since FIRST partial AND at least 1 partial happened
+    unsigned long timeSinceFirstPartial = millis() - firstPartialAfterFullTime;
+    if (partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL ||
+        (hasPartialSinceLastFull && timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS)) {
+
+        Serial.printf("Full refresh triggered (count=%d, time since first partial=%lums)\n",
+                      partialRefreshCount, timeSinceFirstPartial);
+        M5.EPD.UpdateFull(UPDATE_MODE_GC16);
+
+        // Reset all counters
+        partialRefreshCount = 0;
+        hasPartialSinceLastFull = false;
+
+        // Track last full refresh for power management
+        lastFullRefreshTime = millis();
+    }
+
+    Serial.printf("Rendered outline: U+%04X with font %s (partial #%d)\n",
+                 currentGlyphCodepoint,
+                 getFontName(fontPaths[currentFontIndex]).c_str(),
+                 partialRefreshCount);
 
     Serial.println("=== STEP 3: Outline Rendered ===\n");
 }
