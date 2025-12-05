@@ -273,6 +273,14 @@ int outlineMoveTo(const FT_Vector* to, void* user) {
         g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
         g_num_segments++;
     }
+
+    // Save on-curve point
+    if (g_num_points < MAX_OUTLINE_POINTS) {
+        g_outline_points[g_num_points].x = to->x * ctx->scale + ctx->offset_x;
+        g_outline_points[g_num_points].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].is_control = false; // On-curve
+        g_num_points++;
+    }
     return 0;
 }
 
@@ -287,6 +295,14 @@ int outlineLineTo(const FT_Vector* to, void* user) {
         g_outline_segments[g_num_segments].x = to->x * ctx->scale + ctx->offset_x;
         g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
         g_num_segments++;
+    }
+
+    // Save on-curve point
+    if (g_num_points < MAX_OUTLINE_POINTS) {
+        g_outline_points[g_num_points].x = to->x * ctx->scale + ctx->offset_x;
+        g_outline_points[g_num_points].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].is_control = false; // On-curve
+        g_num_points++;
     }
     return 0;
 }
@@ -304,6 +320,22 @@ int outlineConicTo(const FT_Vector* control, const FT_Vector* to, void* user) {
         g_outline_segments[g_num_segments].cx = control->x * ctx->scale + ctx->offset_x;
         g_outline_segments[g_num_segments].cy = control->y * ctx->scale + ctx->offset_y;
         g_num_segments++;
+    }
+
+    // Save control point (off-curve)
+    if (g_num_points < MAX_OUTLINE_POINTS) {
+        g_outline_points[g_num_points].x = control->x * ctx->scale + ctx->offset_x;
+        g_outline_points[g_num_points].y = control->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].is_control = true; // Off-curve (control)
+        g_num_points++;
+    }
+
+    // Save endpoint (on-curve)
+    if (g_num_points < MAX_OUTLINE_POINTS) {
+        g_outline_points[g_num_points].x = to->x * ctx->scale + ctx->offset_x;
+        g_outline_points[g_num_points].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].is_control = false; // On-curve
+        g_num_points++;
     }
     return 0;
 }
@@ -323,6 +355,30 @@ int outlineCubicTo(const FT_Vector* control1, const FT_Vector* control2, const F
         g_outline_segments[g_num_segments].cx2 = control2->x * ctx->scale + ctx->offset_x;
         g_outline_segments[g_num_segments].cy2 = control2->y * ctx->scale + ctx->offset_y;
         g_num_segments++;
+    }
+
+    // Save control point 1 (off-curve)
+    if (g_num_points < MAX_OUTLINE_POINTS) {
+        g_outline_points[g_num_points].x = control1->x * ctx->scale + ctx->offset_x;
+        g_outline_points[g_num_points].y = control1->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].is_control = true; // Off-curve
+        g_num_points++;
+    }
+
+    // Save control point 2 (off-curve)
+    if (g_num_points < MAX_OUTLINE_POINTS) {
+        g_outline_points[g_num_points].x = control2->x * ctx->scale + ctx->offset_x;
+        g_outline_points[g_num_points].y = control2->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].is_control = true; // Off-curve
+        g_num_points++;
+    }
+
+    // Save endpoint (on-curve)
+    if (g_num_points < MAX_OUTLINE_POINTS) {
+        g_outline_points[g_num_points].x = to->x * ctx->scale + ctx->offset_x;
+        g_outline_points[g_num_points].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].is_control = false; // On-curve
+        g_num_points++;
     }
     return 0;
 }
@@ -622,6 +678,31 @@ void renderGlyphOutline() {
     }
 
     Serial.printf("Drew %d line segments\n", lines_drawn);
+
+    // ========================================
+    // STEP 4: Draw on-curve and off-curve points
+    // ========================================
+
+    int on_curve_count = 0;
+    int off_curve_count = 0;
+
+    for (int i = 0; i < g_num_points; i++) {
+        OutlinePoint& pt = g_outline_points[i];
+
+        if (pt.is_control) {
+            // Off-curve point (control point): hollow circle
+            canvas.drawCircle(pt.x, pt.y, 4, 15); // Outer circle (black)
+            canvas.fillCircle(pt.x, pt.y, 3, 0);  // Inner fill (white) - creates hollow effect
+            off_curve_count++;
+        } else {
+            // On-curve point (anchor point): filled circle
+            canvas.fillCircle(pt.x, pt.y, 4, 15); // Filled black circle
+            on_curve_count++;
+        }
+    }
+
+    Serial.printf("Drew %d points: %d on-curve (filled), %d off-curve (hollow)\n",
+                 g_num_points, on_curve_count, off_curve_count);
 
     // Draw labels (font name, Unicode) - same as bitmap mode
     String fontName = getFontName(fontPaths[currentFontIndex]);
