@@ -37,8 +37,7 @@ Visualize TrueType glyphs in high-quality anti-aliased bitmap or detailed vector
 
 ## Hardware Requirements
 
-- **Device**: M5Paper (ESP32-based, not S3)
-- **Display**: 960×540 4.7" e-ink, 16 grayscale levels
+- **Device**: M5Paper (not M5PaperS3)
 - **MicroSD**: FAT32 formatted with `/fonts` directory
 - **Fonts**: TrueType (.ttf) files only
 
