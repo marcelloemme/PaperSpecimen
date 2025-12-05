@@ -860,7 +860,7 @@ void renderGlyphBitmap() {
     int pixel_size = (int)((target_size * face->units_per_EM) / max_dim);
 
     if (pixel_size < 1) pixel_size = 1;
-    if (pixel_size > 500) pixel_size = 500; // Safety limit
+    if (pixel_size > 2000) pixel_size = 2000; // Safety limit (increased for small glyphs)
 
     Serial.printf("Glyph bbox: w=%.1f h=%.1f, units_per_EM=%d, pixel_size=%d\n",
                   width, height, face->units_per_EM, pixel_size);
