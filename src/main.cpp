@@ -270,14 +270,14 @@ int outlineMoveTo(const FT_Vector* to, void* user) {
     if (g_num_segments < MAX_OUTLINE_SEGMENTS) {
         g_outline_segments[g_num_segments].type = SEG_MOVE;
         g_outline_segments[g_num_segments].x = to->x * ctx->scale + ctx->offset_x;
-        g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].y = -to->y * ctx->scale + ctx->offset_y; // Flip Y
         g_num_segments++;
     }
 
     // Save on-curve point
     if (g_num_points < MAX_OUTLINE_POINTS) {
         g_outline_points[g_num_points].x = to->x * ctx->scale + ctx->offset_x;
-        g_outline_points[g_num_points].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].y = -to->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_points[g_num_points].is_control = false; // On-curve
         g_num_points++;
     }
@@ -293,14 +293,14 @@ int outlineLineTo(const FT_Vector* to, void* user) {
     if (g_num_segments < MAX_OUTLINE_SEGMENTS) {
         g_outline_segments[g_num_segments].type = SEG_LINE;
         g_outline_segments[g_num_segments].x = to->x * ctx->scale + ctx->offset_x;
-        g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].y = -to->y * ctx->scale + ctx->offset_y; // Flip Y
         g_num_segments++;
     }
 
     // Save on-curve point
     if (g_num_points < MAX_OUTLINE_POINTS) {
         g_outline_points[g_num_points].x = to->x * ctx->scale + ctx->offset_x;
-        g_outline_points[g_num_points].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].y = -to->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_points[g_num_points].is_control = false; // On-curve
         g_num_points++;
     }
@@ -316,16 +316,16 @@ int outlineConicTo(const FT_Vector* control, const FT_Vector* to, void* user) {
     if (g_num_segments < MAX_OUTLINE_SEGMENTS) {
         g_outline_segments[g_num_segments].type = SEG_CONIC;
         g_outline_segments[g_num_segments].x = to->x * ctx->scale + ctx->offset_x;
-        g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].y = -to->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_segments[g_num_segments].cx = control->x * ctx->scale + ctx->offset_x;
-        g_outline_segments[g_num_segments].cy = control->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].cy = -control->y * ctx->scale + ctx->offset_y; // Flip Y
         g_num_segments++;
     }
 
     // Save control point (off-curve)
     if (g_num_points < MAX_OUTLINE_POINTS) {
         g_outline_points[g_num_points].x = control->x * ctx->scale + ctx->offset_x;
-        g_outline_points[g_num_points].y = control->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].y = -control->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_points[g_num_points].is_control = true; // Off-curve (control)
         g_num_points++;
     }
@@ -333,7 +333,7 @@ int outlineConicTo(const FT_Vector* control, const FT_Vector* to, void* user) {
     // Save endpoint (on-curve)
     if (g_num_points < MAX_OUTLINE_POINTS) {
         g_outline_points[g_num_points].x = to->x * ctx->scale + ctx->offset_x;
-        g_outline_points[g_num_points].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].y = -to->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_points[g_num_points].is_control = false; // On-curve
         g_num_points++;
     }
@@ -349,18 +349,18 @@ int outlineCubicTo(const FT_Vector* control1, const FT_Vector* control2, const F
     if (g_num_segments < MAX_OUTLINE_SEGMENTS) {
         g_outline_segments[g_num_segments].type = SEG_CUBIC;
         g_outline_segments[g_num_segments].x = to->x * ctx->scale + ctx->offset_x;
-        g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].y = -to->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_segments[g_num_segments].cx = control1->x * ctx->scale + ctx->offset_x;
-        g_outline_segments[g_num_segments].cy = control1->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].cy = -control1->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_segments[g_num_segments].cx2 = control2->x * ctx->scale + ctx->offset_x;
-        g_outline_segments[g_num_segments].cy2 = control2->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].cy2 = -control2->y * ctx->scale + ctx->offset_y; // Flip Y
         g_num_segments++;
     }
 
     // Save control point 1 (off-curve)
     if (g_num_points < MAX_OUTLINE_POINTS) {
         g_outline_points[g_num_points].x = control1->x * ctx->scale + ctx->offset_x;
-        g_outline_points[g_num_points].y = control1->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].y = -control1->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_points[g_num_points].is_control = true; // Off-curve
         g_num_points++;
     }
@@ -368,7 +368,7 @@ int outlineCubicTo(const FT_Vector* control1, const FT_Vector* control2, const F
     // Save control point 2 (off-curve)
     if (g_num_points < MAX_OUTLINE_POINTS) {
         g_outline_points[g_num_points].x = control2->x * ctx->scale + ctx->offset_x;
-        g_outline_points[g_num_points].y = control2->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].y = -control2->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_points[g_num_points].is_control = true; // Off-curve
         g_num_points++;
     }
@@ -376,7 +376,7 @@ int outlineCubicTo(const FT_Vector* control1, const FT_Vector* control2, const F
     // Save endpoint (on-curve)
     if (g_num_points < MAX_OUTLINE_POINTS) {
         g_outline_points[g_num_points].x = to->x * ctx->scale + ctx->offset_x;
-        g_outline_points[g_num_points].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_points[g_num_points].y = -to->y * ctx->scale + ctx->offset_y; // Flip Y
         g_outline_points[g_num_points].is_control = false; // On-curve
         g_num_points++;
     }
