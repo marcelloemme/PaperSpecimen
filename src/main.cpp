@@ -559,22 +559,26 @@ bool parseGlyphOutline(uint32_t codepoint) {
 
     FT_Outline* outline = &face->glyph->outline;
 
-    // Calculate bounding box for scaling
-    FT_BBox bbox;
-    FT_Outline_Get_CBox(outline, &bbox);
+    // STEP 5.1: Use font metrics instead of glyph bbox for consistent scaling with bitmap mode
+    // This ensures an apostrophe stays small and a capital letter stays large, just like bitmap
 
-    float width = bbox.xMax - bbox.xMin;
-    float height = bbox.yMax - bbox.yMin;
+    float font_height = face->ascender - face->descender;  // Total font height in font units
+    float units_per_em = face->units_per_EM;
 
-    // Target size: 375px (same as bitmap glyph)
-    float target_size = 375.0f;
-    float scale = target_size / (width > height ? width : height);
+    // Target size: 250px (matching bitmap mode)
+    float target_size = 250.0f;
+
+    // Scale based on font metrics, not individual glyph bbox
+    float scale = target_size / font_height;
 
     // Center on display (540x960 vertical)
     int centerX = 270;
     int centerY = 480;
 
-    // Calculate center of glyph bounding box
+    // Calculate glyph bbox for centering (we still need this for positioning)
+    FT_BBox bbox;
+    FT_Outline_Get_CBox(outline, &bbox);
+
     float bbox_center_x = (bbox.xMin + bbox.xMax) / 2.0f;
     float bbox_center_y = (bbox.yMin + bbox.yMax) / 2.0f;
 
