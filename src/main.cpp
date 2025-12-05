@@ -214,8 +214,40 @@ bool loadCurrentFont() {
 }
 
 // ========================================
-// STEP 2: Outline Parsing with FT_Outline_Decompose
+// STEP 2+3: Outline Parsing and Rendering
 // ========================================
+
+// Maximum points/segments we can store (adjust if needed)
+#define MAX_OUTLINE_POINTS 200
+#define MAX_OUTLINE_SEGMENTS 200
+
+// Point storage for outline rendering
+struct OutlinePoint {
+    float x, y;
+    bool is_control; // true = control point, false = on-curve point
+};
+
+// Segment types
+enum SegmentType {
+    SEG_MOVE,
+    SEG_LINE,
+    SEG_CONIC,
+    SEG_CUBIC
+};
+
+// Segment storage
+struct OutlineSegment {
+    SegmentType type;
+    float x, y;           // Endpoint (or start for MOVE)
+    float cx, cy;         // Control point 1 (for CONIC/CUBIC)
+    float cx2, cy2;       // Control point 2 (for CUBIC only)
+};
+
+// Global storage for parsed outline
+OutlinePoint g_outline_points[MAX_OUTLINE_POINTS];
+OutlineSegment g_outline_segments[MAX_OUTLINE_SEGMENTS];
+int g_num_points = 0;
+int g_num_segments = 0;
 
 // Callback context for outline decomposition
 struct OutlineDecomposeContext {
@@ -224,6 +256,9 @@ struct OutlineDecomposeContext {
     int lineto_count;
     int conicto_count;
     int cubicto_count;
+    float scale;          // Scale factor from font units to pixels
+    float offset_x;       // X offset for centering
+    float offset_y;       // Y offset for centering
 };
 
 // Callback: MoveTo (start new contour)
@@ -231,8 +266,14 @@ int outlineMoveTo(const FT_Vector* to, void* user) {
     OutlineDecomposeContext* ctx = (OutlineDecomposeContext*)user;
     ctx->segment_count++;
     ctx->moveto_count++;
-    Serial.printf("  MoveTo: (%ld, %ld)\n", to->x, to->y);
-    return 0; // success
+
+    if (g_num_segments < MAX_OUTLINE_SEGMENTS) {
+        g_outline_segments[g_num_segments].type = SEG_MOVE;
+        g_outline_segments[g_num_segments].x = to->x * ctx->scale + ctx->offset_x;
+        g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
+        g_num_segments++;
+    }
+    return 0;
 }
 
 // Callback: LineTo (straight line segment)
@@ -240,7 +281,13 @@ int outlineLineTo(const FT_Vector* to, void* user) {
     OutlineDecomposeContext* ctx = (OutlineDecomposeContext*)user;
     ctx->segment_count++;
     ctx->lineto_count++;
-    Serial.printf("  LineTo: (%ld, %ld)\n", to->x, to->y);
+
+    if (g_num_segments < MAX_OUTLINE_SEGMENTS) {
+        g_outline_segments[g_num_segments].type = SEG_LINE;
+        g_outline_segments[g_num_segments].x = to->x * ctx->scale + ctx->offset_x;
+        g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
+        g_num_segments++;
+    }
     return 0;
 }
 
@@ -249,8 +296,15 @@ int outlineConicTo(const FT_Vector* control, const FT_Vector* to, void* user) {
     OutlineDecomposeContext* ctx = (OutlineDecomposeContext*)user;
     ctx->segment_count++;
     ctx->conicto_count++;
-    Serial.printf("  ConicTo: control=(%ld, %ld) → to=(%ld, %ld) [Quadratic Bézier]\n",
-                 control->x, control->y, to->x, to->y);
+
+    if (g_num_segments < MAX_OUTLINE_SEGMENTS) {
+        g_outline_segments[g_num_segments].type = SEG_CONIC;
+        g_outline_segments[g_num_segments].x = to->x * ctx->scale + ctx->offset_x;
+        g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].cx = control->x * ctx->scale + ctx->offset_x;
+        g_outline_segments[g_num_segments].cy = control->y * ctx->scale + ctx->offset_y;
+        g_num_segments++;
+    }
     return 0;
 }
 
@@ -259,8 +313,17 @@ int outlineCubicTo(const FT_Vector* control1, const FT_Vector* control2, const F
     OutlineDecomposeContext* ctx = (OutlineDecomposeContext*)user;
     ctx->segment_count++;
     ctx->cubicto_count++;
-    Serial.printf("  CubicTo: c1=(%ld, %ld) c2=(%ld, %ld) → to=(%ld, %ld) [Cubic Bézier]\n",
-                 control1->x, control1->y, control2->x, control2->y, to->x, to->y);
+
+    if (g_num_segments < MAX_OUTLINE_SEGMENTS) {
+        g_outline_segments[g_num_segments].type = SEG_CUBIC;
+        g_outline_segments[g_num_segments].x = to->x * ctx->scale + ctx->offset_x;
+        g_outline_segments[g_num_segments].y = to->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].cx = control1->x * ctx->scale + ctx->offset_x;
+        g_outline_segments[g_num_segments].cy = control1->y * ctx->scale + ctx->offset_y;
+        g_outline_segments[g_num_segments].cx2 = control2->x * ctx->scale + ctx->offset_x;
+        g_outline_segments[g_num_segments].cy2 = control2->y * ctx->scale + ctx->offset_y;
+        g_num_segments++;
+    }
     return 0;
 }
 
@@ -382,6 +445,197 @@ void testGlyphOutlineAccess(uint32_t codepoint) {
     Serial.println("\n=== STEP 2: Outline Decompose SUCCESS! ===\n");
 }
 
+// ========================================
+// STEP 3: Parse and Render Outline
+// ========================================
+
+// Extract font name from path (forward declaration needed)
+String getFontName(const String& path) {
+    int lastSlash = path.lastIndexOf('/');
+    String filename = path.substring(lastSlash + 1);
+    int lastDot = filename.lastIndexOf('.');
+    if (lastDot > 0) {
+        filename = filename.substring(0, lastDot);
+    }
+    return filename;
+}
+
+// Parse glyph outline and store scaled segments
+bool parseGlyphOutline(uint32_t codepoint) {
+    // Reset storage
+    g_num_segments = 0;
+    g_num_points = 0;
+
+    // Get FT_Face
+    FT_Face face = getFontFaceFromCanvas();
+    if (!face) {
+        Serial.println("ERROR: FT_Face is NULL");
+        return false;
+    }
+
+    // Load glyph
+    FT_UInt glyph_index = FT_Get_Char_Index(face, codepoint);
+    if (glyph_index == 0) {
+        Serial.printf("WARNING: Glyph U+%04X not found\n", codepoint);
+        return false;
+    }
+
+    FT_Error error = FT_Load_Glyph(face, glyph_index, FT_LOAD_NO_SCALE);
+    if (error) {
+        Serial.printf("ERROR: Failed to load glyph (error %d)\n", error);
+        return false;
+    }
+
+    if (face->glyph->format != FT_GLYPH_FORMAT_OUTLINE) {
+        Serial.println("WARNING: Glyph is not outline format");
+        return false;
+    }
+
+    FT_Outline* outline = &face->glyph->outline;
+
+    // Calculate bounding box for scaling
+    FT_BBox bbox;
+    FT_Outline_Get_CBox(outline, &bbox);
+
+    float width = bbox.xMax - bbox.xMin;
+    float height = bbox.yMax - bbox.yMin;
+
+    // Target size: 375px (same as bitmap glyph)
+    float target_size = 375.0f;
+    float scale = target_size / (width > height ? width : height);
+
+    // Center on display (540x960 vertical)
+    int centerX = 270;
+    int centerY = 480;
+
+    float offset_x = centerX - (bbox.xMin + width / 2.0f) * scale;
+    float offset_y = centerY + (bbox.yMin + height / 2.0f) * scale; // Flip Y
+
+    Serial.printf("Parsing outline: scale=%.4f, offset=(%.1f, %.1f)\n", scale, offset_x, offset_y);
+
+    // Setup callback context
+    OutlineDecomposeContext ctx = {0, 0, 0, 0, 0, scale, offset_x, offset_y};
+
+    // Setup callbacks
+    FT_Outline_Funcs callbacks;
+    callbacks.move_to = (FT_Outline_MoveToFunc)outlineMoveTo;
+    callbacks.line_to = (FT_Outline_LineToFunc)outlineLineTo;
+    callbacks.conic_to = (FT_Outline_ConicToFunc)outlineConicTo;
+    callbacks.cubic_to = (FT_Outline_CubicToFunc)outlineCubicTo;
+    callbacks.shift = 0;
+    callbacks.delta = 0;
+
+    // Decompose outline
+    FT_Error decompose_error = FT_Outline_Decompose(outline, &callbacks, &ctx);
+    if (decompose_error) {
+        Serial.printf("ERROR: FT_Outline_Decompose failed (error %d)\n", decompose_error);
+        return false;
+    }
+
+    Serial.printf("Parsed %d segments (MoveTo:%d LineTo:%d Conic:%d Cubic:%d)\n",
+                 g_num_segments, ctx.moveto_count, ctx.lineto_count,
+                 ctx.conicto_count, ctx.cubicto_count);
+
+    return true;
+}
+
+// Render outline on canvas
+void renderGlyphOutline() {
+    if (!fontLoaded) {
+        Serial.println("ERROR: No font loaded");
+        return;
+    }
+
+    Serial.println("\n=== STEP 3: Rendering Outline ===");
+
+    // Parse outline (populates g_outline_segments)
+    if (!parseGlyphOutline(currentGlyphCodepoint)) {
+        Serial.println("ERROR: Failed to parse outline");
+        return;
+    }
+
+    // Clear canvas - white background
+    canvas.fillCanvas(0); // 0 = white
+
+    // Draw outline segments
+    float curr_x = 0, curr_y = 0;
+    int lines_drawn = 0;
+
+    for (int i = 0; i < g_num_segments; i++) {
+        OutlineSegment& seg = g_outline_segments[i];
+
+        switch (seg.type) {
+            case SEG_MOVE:
+                curr_x = seg.x;
+                curr_y = seg.y;
+                break;
+
+            case SEG_LINE:
+                canvas.drawLine(curr_x, curr_y, seg.x, seg.y, 15); // 15 = black
+                curr_x = seg.x;
+                curr_y = seg.y;
+                lines_drawn++;
+                break;
+
+            case SEG_CONIC:
+                // Approximate quadratic Bézier with line segments
+                {
+                    int steps = 10;
+                    for (int t = 1; t <= steps; t++) {
+                        float u = t / (float)steps;
+                        float u1 = 1.0f - u;
+                        // Quadratic Bézier: B(t) = (1-t)²P0 + 2(1-t)t·P1 + t²P2
+                        float bx = u1*u1*curr_x + 2*u1*u*seg.cx + u*u*seg.x;
+                        float by = u1*u1*curr_y + 2*u1*u*seg.cy + u*u*seg.y;
+                        canvas.drawLine(curr_x, curr_y, bx, by, 15);
+                        curr_x = bx;
+                        curr_y = by;
+                        lines_drawn++;
+                    }
+                }
+                break;
+
+            case SEG_CUBIC:
+                // Approximate cubic Bézier with line segments
+                {
+                    int steps = 15;
+                    for (int t = 1; t <= steps; t++) {
+                        float u = t / (float)steps;
+                        float u1 = 1.0f - u;
+                        // Cubic Bézier: B(t) = (1-t)³P0 + 3(1-t)²t·P1 + 3(1-t)t²P2 + t³P3
+                        float bx = u1*u1*u1*curr_x + 3*u1*u1*u*seg.cx + 3*u1*u*u*seg.cx2 + u*u*u*seg.x;
+                        float by = u1*u1*u1*curr_y + 3*u1*u1*u*seg.cy + 3*u1*u*u*seg.cy2 + u*u*u*seg.y;
+                        canvas.drawLine(curr_x, curr_y, bx, by, 15);
+                        curr_x = bx;
+                        curr_y = by;
+                        lines_drawn++;
+                    }
+                }
+                break;
+        }
+    }
+
+    Serial.printf("Drew %d line segments\n", lines_drawn);
+
+    // Draw labels (font name, Unicode) - same as bitmap mode
+    String fontName = getFontName(fontPaths[currentFontIndex]);
+    char codepointStr[32];
+    sprintf(codepointStr, "U+%04X", currentGlyphCodepoint);
+
+    canvas.setTextSize(24);
+    canvas.setTextColor(15);
+    canvas.setTextDatum(TC_DATUM);
+    canvas.drawString(fontName, 270, 20);
+
+    canvas.setTextDatum(BC_DATUM);
+    canvas.drawString(codepointStr, 270, 940);
+
+    // Push to display
+    canvas.pushCanvas(0, 0, UPDATE_MODE_GL16);
+
+    Serial.println("=== STEP 3: Outline Rendered ===\n");
+}
+
 // Generate random glyph codepoint from common ranges
 uint32_t getRandomGlyphCodepoint() {
     // Re-seed with more entropy each time for better randomness
@@ -426,19 +680,9 @@ String codepointToString(uint32_t codepoint) {
     return result;
 }
 
-// Extract font name from path
-String getFontName(const String& path) {
-    int lastSlash = path.lastIndexOf('/');
-    String filename = path.substring(lastSlash + 1);
-    int lastDot = filename.lastIndexOf('.');
-    if (lastDot > 0) {
-        filename = filename.substring(0, lastDot);
-    }
-    return filename;
-}
-
 // Render current glyph
-void renderGlyph() {
+// STEP 3: Temporarily disabled - using renderGlyphOutline() instead
+void renderGlyph_DISABLED() {
     if (!fontLoaded) {
         Serial.println("ERROR: No font loaded");
         return;
@@ -522,7 +766,7 @@ void nextFont() {
     Serial.printf("Switching to font %d/%d\n", currentFontIndex + 1, fontPaths.size());
 
     if (loadCurrentFont()) {
-        renderGlyph();
+        renderGlyphOutline();
     }
 }
 
@@ -537,7 +781,7 @@ void previousFont() {
     Serial.printf("Switching to font %d/%d\n", currentFontIndex + 1, fontPaths.size());
 
     if (loadCurrentFont()) {
-        renderGlyph();
+        renderGlyphOutline();
     }
 }
 
@@ -546,7 +790,7 @@ void randomGlyph() {
     if (!fontLoaded) return;
 
     currentGlyphCodepoint = getRandomGlyphCodepoint();
-    renderGlyph();
+    renderGlyphOutline();
 }
 
 // Change to random font AND random glyph (used for auto-wake)
@@ -560,7 +804,7 @@ void randomFont() {
     // Load the font and generate random glyph
     if (loadCurrentFont()) {
         currentGlyphCodepoint = getRandomGlyphCodepoint();
-        renderGlyph();
+        renderGlyphOutline();
     }
 }
 
@@ -846,7 +1090,7 @@ void setup() {
 
             // Load the font and render the glyph
             if (loadCurrentFont()) {
-                renderGlyph();
+                renderGlyphOutline();
             } else {
                 Serial.println("ERROR: Failed to restore font");
             }
@@ -856,7 +1100,7 @@ void setup() {
         Serial.println("\n=== Loading initial font ===");
         if (loadCurrentFont()) {
             currentGlyphCodepoint = getRandomGlyphCodepoint();
-            renderGlyph();
+            renderGlyphOutline();
 
             // STEP 1 TEST: Try to access FT_Face outline data
             testGlyphOutlineAccess(currentGlyphCodepoint);
