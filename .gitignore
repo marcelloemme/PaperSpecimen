@@ -1,0 +1,17 @@
+# PlatformIO
+.pio/
+.vscode/
+*.pyc
+
+# Build artifacts
+*.bin
+*.elf
+*.map
+
+# macOS
+.DS_Store
+._*
+
+# Backup files
+*~
+*.bak
