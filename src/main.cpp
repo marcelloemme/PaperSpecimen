@@ -569,8 +569,8 @@ bool parseGlyphOutline(uint32_t codepoint) {
     float width = bbox.xMax - bbox.xMin;
     float height = bbox.yMax - bbox.yMin;
 
-    // Target size: 375px (scale each glyph to fill screen optimally)
-    float target_size = 375.0f;
+    // Target size: 400px (scale each glyph to fill screen optimally)
+    float target_size = 400.0f;
     float scale = target_size / (width > height ? width : height);
 
     // Center on display (540x960 vertical)
@@ -954,8 +954,8 @@ void renderGlyphBitmap() {
     float width = bbox.xMax - bbox.xMin;
     float height = bbox.yMax - bbox.yMin;
 
-    // Target size: 375px (scale each glyph to fill screen optimally)
-    float target_size = 375.0f;
+    // Target size: 400px (scale each glyph to fill screen optimally)
+    float target_size = 400.0f;
 
     // Calculate pixel size needed to achieve target_size
     // Formula: pixel_size = (target_size * units_per_EM) / max_glyph_dimension
