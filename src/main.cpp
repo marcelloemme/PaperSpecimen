@@ -1421,6 +1421,11 @@ void setup() {
             currentGlyphCodepoint = getRandomGlyphCodepoint();
             renderGlyph();
 
+            // Full refresh after first render to clear boot screen ghosting
+            Serial.println("Initial full refresh to clear boot screen ghosting");
+            M5.EPD.UpdateFull(UPDATE_MODE_GC16);
+            lastFullRefreshTime = millis();
+
             // STEP 1 TEST: Try to access FT_Face outline data
             testGlyphOutlineAccess(currentGlyphCodepoint);
         } else {
