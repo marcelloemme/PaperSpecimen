@@ -13,7 +13,7 @@ Visualize TrueType glyphs in high-quality anti-aliased bitmap or detailed vector
 **Bitmap Mode** (default)
 - Custom FreeType rendering with 16-level grayscale anti-aliasing
 - Smooth, high-quality glyph visualization
-- Per-glyph auto-scaling to 400px target size
+- Per-glyph auto-scaling to 375px target size
 
 **Outline Mode** (toggle via setup)
 - Vector outline visualization with control points
@@ -25,7 +25,7 @@ Visualize TrueType glyphs in high-quality anti-aliased bitmap or detailed vector
 ### Configuration UI (v2.1+)
 
 **First Boot Setup:**
-On first boot (or after deleting config), interactive setup screen allows you to configure:
+On first boot (or after reset), interactive setup screen allows you to configure:
 
 1. **Refresh Timer** - How often to wake from sleep and show new random glyph:
    - 15 minutes (default)
@@ -41,7 +41,7 @@ On first boot (or after deleting config), interactive setup screen allows you to
    - Select/Deselect all - Quick toggle for all fonts
    - Individual font checkboxes
    - Multi-page navigation for many fonts (5+ fonts)
-   - Only enabled fonts appear in rotation
+   - Only enabled fonts will appear in rotation
 
 **Configuration Persistence:**
 - Settings saved to `/paperspecimen.cfg` on SD card
@@ -55,19 +55,19 @@ On first boot (or after deleting config), interactive setup screen allows you to
 
 ### Boot & Shutdown Screens (v2.1.1+)
 
-**Boot Splash** (5 seconds):
+**Boot Splash** (shown for 5 seconds):
 - QR code linking to GitHub repository
 - "PaperSpecimen" header
 - Version number footer
 
-**Shutdown Screen** (2 seconds):
+**Shutdown Screen**:
 - Long press center button (5+ seconds) triggers graceful shutdown
 - Same QR code and labels as boot
 - Enters deep sleep until manual wake (center button press)
 
 ### Smart Display Management
 
-- **Per-glyph scaling**: Each glyph scales independently to fill screen optimally (400px max)
+- **Per-glyph scaling**: Each glyph scales independently to fill screen optimally (375px max)
 - **Smart refresh**: Partial refresh for speed, automatic full refresh every 5 updates or 10 seconds
 - **Ghosting prevention**: Full refresh on boot and periodically during use
 - **Unicode exploration**: Random glyph selection from 9 common Unicode ranges
@@ -86,7 +86,7 @@ On first boot (or after deleting config), interactive setup screen allows you to
 
 - **Device**: M5Paper (not M5PaperS3)
 - **MicroSD**: FAT32 formatted with `/fonts` directory
-- **Fonts**: TrueType (.ttf) or OpenType (.otf) files
+- **Fonts**: TrueType (.ttf) files
 
 ## Setup
 
@@ -94,7 +94,7 @@ On first boot (or after deleting config), interactive setup screen allows you to
 
 1. Format microSD card as **FAT32**
 2. Create `/fonts` directory in root
-3. Copy your `.ttf` or `.otf` font files into `/fonts`
+3. Copy your `.ttf` font files into `/fonts`
 4. **Important**: If you add/remove/change fonts while the device is on, you must restart by pressing the reset button on the back, then the center side button to wake
 
 Example structure:
@@ -104,7 +104,7 @@ Example structure:
 │   ├── Helvetica-Regular.ttf
 │   ├── Helvetica-Bold.ttf
 │   ├── NotoSans-Regular.ttf
-│   └── YourFont.otf
+│   └── YourFont.ttf
 └── paperspecimen.cfg  (auto-generated on first boot)
 ```
 
@@ -125,7 +125,7 @@ esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x10000 firmware.bin
 The device will:
 1. Show boot splash for 5 seconds (QR code + version)
 2. Scan for fonts in `/fonts`
-3. Launch setup UI (first boot only)
+3. Launch setup UI (only after reset)
 4. Save configuration to `/paperspecimen.cfg`
 5. Display first random glyph in bitmap mode
 6. Enter deep sleep after inactivity
@@ -209,9 +209,6 @@ Random glyph selection currently includes these ranges (190 total characters):
 - Deep sleep with timer wake (5/10/15 min configurable)
 - RTC GPIO hold to maintain power state
 
-## Configuration File Format
-
-Location: `/paperspecimen.cfg`
 
 **Format** (plain text):
 ```
@@ -298,12 +295,6 @@ pio device monitor -b 115200
 - Works only on auto-wake (timer), not manual wake (button)
 - Serial output shows: "Random mode selected: BITMAP/OUTLINE"
 
-### QR Code Not Scanning
-- Ensure good lighting
-- Try different QR scanner apps
-- QR encodes: `https://github.com/marcelloemme/PaperSpecimen`
-- If corrupted: file issue on GitHub
-
 ## Architecture
 
 ### v2.1 Configuration System
@@ -370,7 +361,7 @@ FT_Face face = _ZN8TFT_eSPI10_font_faceE.ft_face;
 - On-curve: Filled circles (4px radius)
 - Off-curve: Hollow circles (4px outer, 3px inner)
 
-**Step 7**: Construction lines (dashed)
+**Step 5**: Construction lines (dashed)
 - Connect control points to anchor points
 - Pattern: 10px on, 5px off
 - Color: Black (15) for visibility against gray outline (12)
@@ -391,25 +382,6 @@ RTC_DATA_ATTR struct {
 - **Auto-wake (timer)**: Apply random font/mode based on config
 - **Button wake**: Restore exact previous state (font, glyph, mode)
 - **Cold boot**: Show setup if no config, else load first font
-
-### QR Code Implementation (v2.1.1)
-
-**Generation:**
-- Python script (`generate_qr.py`) creates QR from URL
-- 29×29 module Version 3 QR code
-- Error correction: Medium (ERROR_CORRECT_M)
-- Encodes: `https://github.com/marcelloemme/PaperSpecimen`
-
-**Storage:**
-- Bitmap array in PROGMEM (116 bytes)
-- 4 bytes per row (32 bits, 29 used + 3 padding)
-- Bit packing: MSB first (1=black, 0=white)
-
-**Rendering:**
-- 6×6 pixels per module = 174×174 total display size
-- Centered at (270, 480)
-- Pixel-by-pixel drawing for accuracy
-- Shown on boot (5s) and shutdown (2s)
 
 ## Version History
 
@@ -468,20 +440,11 @@ RTC_DATA_ATTR struct {
 - **Enhanced UI**: Second configuration page for Unicode blocks
 - **Smart fallback**: Skip unavailable ranges per font
 
-### Future Ideas
-- Font metadata display (designer, version, copyright)
-- Favorites/bookmarks system
-- Multi-glyph comparison view (split screen)
-- Export snapshots to SD card
-- Web interface for remote control
-- OTA firmware updates
-
 ## Credits
 
 - **Hardware**: M5Stack M5Paper
 - **Libraries**: M5EPD (includes FreeType for TTF rendering)
 - **Framework**: Arduino ESP32 via PlatformIO
-- **QR Generation**: Python `qrcode` library
 - **Development**: Built with [Claude Code](https://claude.com/claude-code)
 
 ## License
