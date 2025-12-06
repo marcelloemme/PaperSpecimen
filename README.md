@@ -46,7 +46,7 @@ On first boot (or after deleting config), interactive setup screen allows you to
 **Configuration Persistence:**
 - Settings saved to `/paperspecimen.cfg` on SD card
 - Survives power cycles and deep sleep
-- To reconfigure: delete config file and restart
+- To reconfigure: press reset button on the back and restart (config will be recreated automatically)
 
 **Navigation:**
 - `<<<` / `>>>` - Previous/next page (when 6+ fonts)
@@ -224,7 +224,7 @@ Location: `/paperspecimen.cfg`
 ...                   # One line per font
 ```
 
-**To reset:** Delete `/paperspecimen.cfg` and restart device
+**To reset:** Press reset button on the back and restart device (config will be recreated automatically)
 
 ## Building from Source
 
@@ -273,7 +273,7 @@ pio device monitor -b 115200
 
 ### "NO FONTS ENABLED"
 - At least one font must be enabled in configuration
-- Delete `/paperspecimen.cfg` and restart to reconfigure
+- Press reset button on the back and restart to reconfigure (config will be recreated automatically)
 - Setup screen prevents saving with zero fonts enabled (auto-enables all as fallback)
 
 ### "FONT LOAD ERROR"
