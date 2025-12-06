@@ -14,6 +14,992 @@
 // Canvas for rendering
 M5EPD_Canvas canvas(&M5.EPD);  // Single full screen canvas for everything
 
+// QR Code bitmap for GitHub repository
+// URL: https://github.com/marcelloemme/PaperSpecimen
+// Size: 29x29 modules (Version 3 QR Code)
+// Generated from qr-code.png - VERIFIED CORRECT
+const uint8_t QR_SIZE = 29;
+const uint8_t qrcode_data[] PROGMEM = {
+    0b11111110, 0b01000010, 0b10111011, 0b11111000,  // Row 0
+    0b10000010, 0b11011101, 0b11100010, 0b00001000,  // Row 1
+    0b10111010, 0b01110001, 0b10010010, 0b11101000,  // Row 2
+    0b10111010, 0b11010011, 0b01001010, 0b11101000,  // Row 3
+    0b10111010, 0b00101010, 0b10111010, 0b11101000,  // Row 4
+    0b10000010, 0b10100101, 0b00001010, 0b00001000,  // Row 5
+    0b11111110, 0b10101010, 0b10101011, 0b11111000,  // Row 6
+    0b00000000, 0b00001011, 0b00000000, 0b00000000,  // Row 7
+    0b11111011, 0b11101111, 0b11000101, 0b01010000,  // Row 8
+    0b11100001, 0b11000010, 0b11111011, 0b10001000,  // Row 9
+    0b11110110, 0b11011001, 0b10001000, 0b10000000,  // Row 10
+    0b10011100, 0b11110001, 0b00101000, 0b01010000,  // Row 11
+    0b10110110, 0b11010111, 0b01010000, 0b01100000,  // Row 12
+    0b00110100, 0b00101000, 0b11111111, 0b10001000,  // Row 13
+    0b10100011, 0b11100011, 0b00001100, 0b11100000,  // Row 14
+    0b00111001, 0b10001011, 0b00111111, 0b10010000,  // Row 15
+    0b01000111, 0b00101111, 0b11010101, 0b01100000,  // Row 16
+    0b11010101, 0b11100001, 0b11110111, 0b10101000,  // Row 17
+    0b10100110, 0b11111101, 0b11001011, 0b10100000,  // Row 18
+    0b10110101, 0b00010010, 0b10001110, 0b00010000,  // Row 19
+    0b10001110, 0b01111110, 0b01011111, 0b10111000,  // Row 20
+    0b00000000, 0b10101100, 0b00101000, 0b11111000,  // Row 21
+    0b11111110, 0b11001001, 0b10011010, 0b11100000,  // Row 22
+    0b10000010, 0b00010011, 0b10011000, 0b10000000,  // Row 23
+    0b10111010, 0b10111111, 0b01001111, 0b10101000,  // Row 24
+    0b10111010, 0b11010100, 0b11111000, 0b01111000,  // Row 25
+    0b10111010, 0b11100011, 0b10011111, 0b11110000,  // Row 26
+    0b10000010, 0b11000011, 0b10001101, 0b01010000,  // Row 27
+    0b11111110, 0b11101110, 0b01010011, 0b10100000   // Row 28
+};
+
+// ========================================
+// v2.1: Configuration Structure
+// ========================================
+struct AppConfig {
+    uint8_t wakeIntervalMinutes;  // 5, 10, or 15
+    std::vector<bool> fontEnabled; // Per-font enable/disable flags
+    bool allowDifferentFont;       // Allow random font on wake (default: true)
+    bool allowDifferentMode;       // Allow random mode (outline/bitmap) on wake (default: true)
+};
+
+// Global config instance
+AppConfig config;
+const char* CONFIG_FILE = "/paperspecimen.cfg";
+
+// ========================================
+// v2.1: Config File I/O Functions
+// ========================================
+
+// Load config from SD card
+bool loadConfig() {
+    if (!SD.exists(CONFIG_FILE)) {
+        Serial.println("Config file not found - will run first-time setup");
+        return false;
+    }
+
+    File file = SD.open(CONFIG_FILE, FILE_READ);
+    if (!file) {
+        Serial.println("ERROR: Cannot open config file for reading");
+        return false;
+    }
+
+    Serial.println("\n=== Loading Config ===");
+
+    // Read wake interval (first line)
+    String line = file.readStringUntil('\n');
+    line.trim();
+    config.wakeIntervalMinutes = line.toInt();
+
+    if (config.wakeIntervalMinutes != 5 &&
+        config.wakeIntervalMinutes != 10 &&
+        config.wakeIntervalMinutes != 15) {
+        Serial.printf("ERROR: Invalid wake interval %d, expected 5/10/15\n", config.wakeIntervalMinutes);
+        file.close();
+        return false;
+    }
+
+    Serial.printf("Wake interval: %d minutes\n", config.wakeIntervalMinutes);
+
+    // Read allowDifferentFont (second line)
+    line = file.readStringUntil('\n');
+    line.trim();
+    config.allowDifferentFont = (line == "1" || line == "true");
+    Serial.printf("Allow different font: %s\n", config.allowDifferentFont ? "yes" : "no");
+
+    // Read allowDifferentMode (third line)
+    line = file.readStringUntil('\n');
+    line.trim();
+    config.allowDifferentMode = (line == "1" || line == "true");
+    Serial.printf("Allow different mode: %s\n", config.allowDifferentMode ? "yes" : "no");
+
+    // Read font enable flags (remaining lines, one per font)
+    config.fontEnabled.clear();
+    int fontIndex = 0;
+    while (file.available()) {
+        line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() > 0) {
+            bool enabled = (line == "1" || line == "true");
+            config.fontEnabled.push_back(enabled);
+            fontIndex++;
+        }
+    }
+
+    file.close();
+    Serial.printf("Loaded %d font enable flags\n", config.fontEnabled.size());
+    Serial.println("=== Config Loaded Successfully ===\n");
+    return true;
+}
+
+// Save config to SD card
+bool saveConfig() {
+    Serial.println("\n=== Saving Config ===");
+
+    File file = SD.open(CONFIG_FILE, FILE_WRITE);
+    if (!file) {
+        Serial.println("ERROR: Cannot open config file for writing");
+        return false;
+    }
+
+    // Write wake interval
+    file.println(config.wakeIntervalMinutes);
+    Serial.printf("Saved wake interval: %d minutes\n", config.wakeIntervalMinutes);
+
+    // Write allowDifferentFont
+    file.println(config.allowDifferentFont ? "1" : "0");
+    Serial.printf("Saved allow different font: %s\n", config.allowDifferentFont ? "yes" : "no");
+
+    // Write allowDifferentMode
+    file.println(config.allowDifferentMode ? "1" : "0");
+    Serial.printf("Saved allow different mode: %s\n", config.allowDifferentMode ? "yes" : "no");
+
+    // Write font enable flags
+    for (size_t i = 0; i < config.fontEnabled.size(); i++) {
+        file.println(config.fontEnabled[i] ? "1" : "0");
+    }
+    Serial.printf("Saved %d font enable flags\n", config.fontEnabled.size());
+
+    file.close();
+    Serial.println("=== Config Saved Successfully ===\n");
+    return true;
+}
+
+// Initialize default config
+void initDefaultConfig(int numFonts) {
+    config.wakeIntervalMinutes = 15; // Default: 15 minutes
+    config.allowDifferentFont = true; // Default: allow random font
+    config.allowDifferentMode = true; // Default: allow random mode
+    config.fontEnabled.clear();
+    for (int i = 0; i < numFonts; i++) {
+        config.fontEnabled.push_back(true); // All fonts enabled by default
+    }
+    Serial.printf("Default config initialized: %d min, allow font=%s, allow mode=%s, %d fonts (all enabled)\n",
+                  config.wakeIntervalMinutes,
+                  config.allowDifferentFont ? "yes" : "no",
+                  config.allowDifferentMode ? "yes" : "no",
+                  numFonts);
+}
+
+// ========================================
+// v2.1: UI Framework for Setup Screens
+// ========================================
+
+// UI Constants
+const int UI_TEXT_SIZE = 2;            // Font size for UI (bitmap font, 2 = 16px height)
+const int UI_LINE_HEIGHT = 40;         // Spacing between lines
+const int UI_TOP_MARGIN = 80;          // Top margin for first item
+const int UI_CHECKBOX_SIZE = 20;       // Size of checkbox/radio button
+const int UI_INDENT = 60;              // Indent for checkboxes
+const int UI_MAX_TEXT_WIDTH = 380;     // Max text width (540 - 100 left - 60 right = 380px)
+
+// Menu item types
+enum MenuItemType {
+    MENU_CONFIRM,      // Confirm button
+    MENU_LABEL,        // Non-selectable label (e.g., "Refresh timer", "Select/Deselect all")
+    MENU_RADIO,        // Radio button (interval selection)
+    MENU_CHECKBOX,     // Checkbox (font selection)
+    MENU_SEPARATOR,    // 30px empty space
+    MENU_PAGE_NAV      // "…" for page navigation
+};
+
+// Menu item structure
+struct MenuItem {
+    MenuItemType type;
+    String label;
+    bool selected;     // For radio/checkbox
+    int value;         // For radio (5, 10, 15) or page navigation
+    int fontIndex;     // For font checkboxes (-1 for non-font items)
+};
+
+// Pagination state
+struct PaginationState {
+    int currentPage;
+    int totalPages;
+    int fontsPerPage;
+};
+
+// UI Helper: Shorten text if it exceeds max width, keeping equal chars before/after "..."
+// NOTE: This function uses bitmap font for measurement (FreeType fonts return textWidth=0)
+String shortenTextIfNeeded(const String& text, int maxWidth, int textSize = UI_TEXT_SIZE) {
+    // IMPORTANT: Unload FreeType font and use bitmap font for measurement
+    // FreeType canvas.textWidth() returns 0 because it's configured for glyph rendering, not labels
+    canvas.unloadFont();
+    canvas.setFreeFont(NULL);
+    canvas.setTextFont(1); // Font 1 = bitmap font
+    canvas.setTextSize(textSize);
+
+    int textWidth = canvas.textWidth(text);
+
+    Serial.printf("shortenTextIfNeeded: text='%s' textWidth=%d maxWidth=%d textSize=%d\n",
+                  text.c_str(), textWidth, maxWidth, textSize);
+
+    // If text fits, return as-is (textSize already set correctly)
+    if (textWidth <= maxWidth) {
+        Serial.println("  -> Text fits, no truncation needed");
+        return text;
+    }
+
+    Serial.println("  -> Text too long, truncating...");
+
+    // Calculate how many characters to keep on each side
+    int textLen = text.length();
+    int ellipsisWidth = canvas.textWidth("...");
+
+    // Binary search to find optimal number of chars to keep on each side
+    int charsPerSide = 1;
+    int maxCharsPerSide = textLen / 2;
+
+    for (int chars = maxCharsPerSide; chars >= 1; chars--) {
+        // Build shortened string: first N chars + "..." + last N chars
+        String shortened = text.substring(0, chars) + "..." + text.substring(textLen - chars);
+        int shortenedWidth = canvas.textWidth(shortened);
+
+        if (shortenedWidth <= maxWidth) {
+            return shortened; // textSize already set correctly
+        }
+    }
+
+    // Fallback: just show "..." if even 1 char per side is too long
+    return "..."; // textSize already set correctly
+}
+
+// UI Helper: Draw checkbox as ASCII ( ) or (*)
+void drawCheckbox(int x, int y, bool checked) {
+    canvas.setTextDatum(CL_DATUM);
+    if (checked) {
+        canvas.drawString("(*)", x, y + UI_LINE_HEIGHT/2);
+    } else {
+        canvas.drawString("( )", x, y + UI_LINE_HEIGHT/2);
+    }
+}
+
+// UI Helper: Draw radio button as ASCII ( ) or (*)
+void drawRadioButton(int x, int y, bool selected) {
+    canvas.setTextDatum(CL_DATUM);
+    if (selected) {
+        canvas.drawString("(*)", x, y + UI_LINE_HEIGHT/2);
+    } else {
+        canvas.drawString("( )", x, y + UI_LINE_HEIGHT/2);
+    }
+}
+
+// UI Helper: Draw menu item
+void drawMenuItem(int y, MenuItem& item, bool isCursor) {
+    int textX = 270; // Center X for text
+    int checkboxX = UI_INDENT; // Left margin for checkboxes
+
+    // Draw cursor indicator ">" for selected item
+    if (isCursor) {
+        canvas.setTextDatum(CL_DATUM);
+        canvas.drawString(">", 20, y + UI_LINE_HEIGHT/2);
+    }
+
+    // Draw based on item type
+    switch (item.type) {
+        case MENU_CONFIRM:
+            // Draw invisible (*) for alignment, then "Confirm" button
+            canvas.setTextColor(0); // White (invisible)
+            canvas.setTextDatum(CL_DATUM);
+            canvas.drawString("(*)", checkboxX, y + UI_LINE_HEIGHT/2);
+            canvas.setTextColor(15); // Back to black
+            canvas.drawString(item.label, checkboxX + 40, y + UI_LINE_HEIGHT/2); // +40 for "(*) " + space
+            break;
+
+        case MENU_LABEL:
+            // Draw invisible (*) for alignment, then label text
+            canvas.setTextColor(0); // White (invisible)
+            canvas.setTextDatum(CL_DATUM);
+            canvas.drawString("(*)", checkboxX, y + UI_LINE_HEIGHT/2);
+            canvas.setTextColor(15); // Back to black
+            canvas.drawString(item.label, checkboxX + 40, y + UI_LINE_HEIGHT/2); // +40 for "(*) " + space
+            break;
+
+        case MENU_RADIO:
+            // Draw radio button + label with space
+            drawRadioButton(checkboxX, y, item.selected);
+            canvas.setTextDatum(CL_DATUM);
+            canvas.drawString(item.label, checkboxX + 40, y + UI_LINE_HEIGHT/2); // +40 for "(*) " + space
+            break;
+
+        case MENU_CHECKBOX: {
+            // Draw checkbox + label with space (shorten font names if needed)
+            drawCheckbox(checkboxX, y, item.selected);
+            canvas.setTextDatum(CL_DATUM);
+            String displayLabel = shortenTextIfNeeded(item.label, UI_MAX_TEXT_WIDTH);
+            canvas.drawString(displayLabel, checkboxX + 40, y + UI_LINE_HEIGHT/2); // +40 for "(*) " + space
+            break;
+        }
+
+        case MENU_SEPARATOR:
+            // Empty space (30px height) - nothing to draw
+            break;
+
+        case MENU_PAGE_NAV:
+            // Draw "<<<" or ">>>" aligned left like fonts (with invisible marker for alignment)
+            canvas.setTextColor(0); // White (invisible)
+            canvas.setTextDatum(CL_DATUM);
+            canvas.drawString("(*)", checkboxX, y + UI_LINE_HEIGHT/2);
+            canvas.setTextColor(15); // Back to black
+            // item.value: -1 = previous page (<<<), 1 = next page (>>>)
+            String navSymbol = (item.value == -1) ? "<<<" : ">>>";
+            canvas.drawString(navSymbol, checkboxX + 40, y + UI_LINE_HEIGHT/2); // +40 for "(*) " + space
+            break;
+    }
+}
+
+// UI Helper: Reset menu refresh counters (call before first menu screen)
+void resetMenuRefresh() {
+    // Force a full refresh on next render by triggering the condition
+    // This is done by making static variables accessible via a reset function
+    // We'll handle this inline in the render function with a static firstRun flag
+}
+
+// UI Helper: Render full menu screen with smart refresh
+void renderMenuScreen(const String& title, std::vector<MenuItem>& items, int cursorIndex, int scrollOffset, bool forceFullRefresh = false) {
+    // Static variables for smart refresh tracking (menu-specific)
+    static uint8_t menuPartialCount = 0;
+    static unsigned long menuFirstPartialTime = 0;
+    static bool menuHasPartial = false;
+
+    canvas.fillCanvas(0); // White background
+    canvas.setTextSize(UI_TEXT_SIZE);
+    canvas.setTextColor(15); // Black text
+
+    // Draw title at top (if provided)
+    if (title.length() > 0) {
+        canvas.setTextDatum(TC_DATUM);
+        canvas.drawString(title, 270, 30);
+    }
+
+    // Calculate visible items (max items that fit on screen)
+    int maxVisibleItems = 8; // Conservative estimate for 540x960 screen
+    int startIdx = scrollOffset;
+    int endIdx = min((int)items.size(), scrollOffset + maxVisibleItems);
+
+    // Draw visible items
+    for (int i = startIdx; i < endIdx; i++) {
+        int relativeIdx = i - scrollOffset;
+        int y = UI_TOP_MARGIN + relativeIdx * UI_LINE_HEIGHT;
+        bool isCursor = (i == cursorIndex);
+        drawMenuItem(y, items[i], isCursor);
+    }
+
+    // Smart refresh logic (same as main program)
+    if (forceFullRefresh) {
+        // Force full refresh (e.g., first screen after boot)
+        canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+        menuPartialCount = 0;
+        menuHasPartial = false;
+        Serial.println("Menu forced full refresh");
+    } else {
+        // Normal partial refresh
+        canvas.pushCanvas(0, 0, UPDATE_MODE_GL16);
+
+        // Track first partial after full
+        if (!menuHasPartial) {
+            menuFirstPartialTime = millis();
+            menuHasPartial = true;
+        }
+
+        menuPartialCount++;
+
+        // Trigger full refresh if:
+        // A) 5 partials reached, OR
+        // B) 10 seconds passed since FIRST partial
+        unsigned long timeSinceFirstPartial = millis() - menuFirstPartialTime;
+        if (menuPartialCount >= 5 ||
+            (menuHasPartial && timeSinceFirstPartial >= 10000)) {
+
+            Serial.printf("Menu full refresh (count=%d, time=%lums)\n", menuPartialCount, timeSinceFirstPartial);
+            M5.EPD.UpdateFull(UPDATE_MODE_GC16);
+
+            // Reset counters
+            menuPartialCount = 0;
+            menuHasPartial = false;
+        }
+    }
+}
+
+// ========================================
+// v2.1.3: Unified Setup Screen with Standby Behavior Settings
+// ========================================
+
+// Forward declarations
+extern std::vector<String> fontPaths;
+String getFontName(const String& path); // Already defined earlier in the file
+
+// Build menu items for current page
+void buildUnifiedMenu(std::vector<MenuItem>& items, PaginationState& pagination,
+                      int selectedInterval, const std::vector<bool>& fontEnabled,
+                      bool allowDifferentFont, bool allowDifferentMode) {
+    items.clear();
+
+    // 1. Confirm button (always first)
+    items.push_back({MENU_CONFIRM, "Confirm", false, 0, -1});
+
+    // 2. Separator (30px)
+    items.push_back({MENU_SEPARATOR, "", false, 0, -1});
+
+    // 3. "Refresh timer" label (non-selectable)
+    items.push_back({MENU_LABEL, "Refresh timer", false, 0, -1});
+
+    // 4. Radio buttons for intervals (15min default)
+    items.push_back({MENU_RADIO, "15 min", selectedInterval == 15, 15, -1});
+    items.push_back({MENU_RADIO, "10 min", selectedInterval == 10, 10, -1});
+    items.push_back({MENU_RADIO, "5 min", selectedInterval == 5, 5, -1});
+
+    // 5. Separator (30px)
+    items.push_back({MENU_SEPARATOR, "", false, 0, -1});
+
+    // 6. "When in standby" label (non-selectable)
+    items.push_back({MENU_LABEL, "When in standby", false, 0, -1});
+
+    // 7. Checkboxes for standby behavior
+    items.push_back({MENU_CHECKBOX, "Allow different font", allowDifferentFont, 0, -3}); // fontIndex=-3 for allowDifferentFont
+    items.push_back({MENU_CHECKBOX, "Allow different mode", allowDifferentMode, 0, -4}); // fontIndex=-4 for allowDifferentMode
+
+    // 8. Separator (30px)
+    items.push_back({MENU_SEPARATOR, "", false, 0, -1});
+
+    // 9. Font selection with pagination
+    // Strategy: Always show "Select/Deselect all" on every page
+    // Max 5 total items in font section: Select/Deselect all + up to 5 slots for fonts/dots
+
+    int totalFonts = fontPaths.size();
+
+    // Calculate fonts per page based on position
+    // Page 0: Select/Deselect all + up to 5 fonts (if ≤5 total, show all; otherwise show 4 + ">>>")
+    // Page 1+: Select/Deselect all + "<<<" + 3 fonts (+ ">>>" if more pages)
+
+    int fontsThisPage;
+    int startFont;
+
+    if (pagination.currentPage == 0) {
+        // First page: can show up to 5 fonts if ≤5 total, otherwise 4 + ">>>"
+        if (totalFonts <= 5) {
+            // Show all fonts in one page
+            fontsThisPage = totalFonts;
+            startFont = 0;
+            pagination.totalPages = 1;
+        } else {
+            // Show 4 fonts, reserve space for ">>>"
+            fontsThisPage = 4;
+            startFont = 0;
+            // Calculate total pages: first page 4 fonts, subsequent pages 3 fonts each
+            int remainingFonts = totalFonts - 4;
+            pagination.totalPages = 1 + (remainingFonts + 2) / 3; // Ceiling division
+        }
+    } else {
+        // Subsequent pages: "<<<" at top, then up to 3 fonts
+        startFont = 4 + (pagination.currentPage - 1) * 3;
+        int remainingFonts = totalFonts - startFont;
+        fontsThisPage = min(3, remainingFonts);
+    }
+
+    int endFont = startFont + fontsThisPage;
+
+    // Select/Deselect all (ALWAYS first in font section, on every page)
+    bool allSelected = true;
+    for (bool enabled : fontEnabled) {
+        if (!enabled) {
+            allSelected = false;
+            break;
+        }
+    }
+    items.push_back({MENU_LABEL, "Select/Deselect all", allSelected, 0, -2}); // fontIndex=-2 special, clickable but no marker
+
+    // "..." prev page navigation (if not on first page) - AFTER Select/Deselect all
+    if (pagination.currentPage > 0) {
+        items.push_back({MENU_PAGE_NAV, "...", false, -1, -1}); // value=-1 means prev
+    }
+
+    // Font checkboxes for current page
+    for (int i = startFont; i < endFont; i++) {
+        String fontName = getFontName(fontPaths[i]);
+        items.push_back({MENU_CHECKBOX, fontName, fontEnabled[i], 0, i});
+    }
+
+    // "..." next page navigation (if more pages available)
+    if (pagination.currentPage < pagination.totalPages - 1) {
+        items.push_back({MENU_PAGE_NAV, "...", false, 1, -1}); // value=1 means next
+    }
+}
+
+// Render unified setup screen with fixed headers/footers
+void renderUnifiedSetupScreen(std::vector<MenuItem>& items, int cursorIndex, bool forceFullRefresh = false) {
+    static uint8_t menuPartialCount = 0;
+    static unsigned long menuFirstPartialTime = 0;
+    static bool menuHasPartial = false;
+
+    canvas.fillCanvas(0);
+    canvas.setTextSize(UI_TEXT_SIZE);
+    canvas.setTextColor(15);
+
+    // Fixed header: "PaperSpecimen" at Y=30
+    canvas.setTextDatum(TC_DATUM);
+    canvas.drawString("PaperSpecimen", 270, 30);
+
+    // Fixed footer: "v2.1.3" at Y=930
+    canvas.setTextDatum(BC_DATUM);
+    canvas.drawString("v2.1.3", 270, 930);
+
+    // Calculate available space for menu items
+    const int headerBottom = 30 + 24; // Y=30 + text height
+    const int footerTop = 930 - 24;   // Y=930 - text height
+    const int availableHeight = footerTop - headerBottom;
+
+    // Calculate flex space (divide remaining space into 2 equal parts)
+    int totalItemHeight = items.size() * UI_LINE_HEIGHT;
+    int flexSpace = max(0, (availableHeight - totalItemHeight) / 2);
+
+    // Draw menu items starting after header + flex space
+    int startY = headerBottom + flexSpace;
+
+    for (int i = 0; i < items.size(); i++) {
+        int y = startY + i * UI_LINE_HEIGHT;
+        bool isCursor = (i == cursorIndex);
+        drawMenuItem(y, items[i], isCursor);
+    }
+
+    // Smart refresh
+    if (forceFullRefresh) {
+        canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+        menuPartialCount = 0;
+        menuHasPartial = false;
+    } else {
+        canvas.pushCanvas(0, 0, UPDATE_MODE_A2); // Anti-aliased partial refresh
+        if (!menuHasPartial) {
+            menuFirstPartialTime = millis();
+            menuHasPartial = true;
+        }
+        menuPartialCount++;
+        unsigned long timeSinceFirstPartial = millis() - menuFirstPartialTime;
+        if (menuPartialCount >= 5 || (menuHasPartial && timeSinceFirstPartial >= 10000)) {
+            M5.EPD.UpdateFull(UPDATE_MODE_GC16);
+            menuPartialCount = 0;
+            menuHasPartial = false;
+        }
+    }
+}
+
+// Unified setup screen - combines interval and font selection
+void setupScreenUnified() {
+    Serial.println("\n=== Unified Setup Screen ===");
+
+    // Initialize state
+    int selectedInterval = 15; // Default: 15 minutes
+    std::vector<bool> fontEnabledLocal = config.fontEnabled; // All fonts enabled by default
+    bool allowDifferentFontLocal = config.allowDifferentFont;
+    bool allowDifferentModeLocal = config.allowDifferentMode;
+
+    PaginationState pagination = {0, 1, 4}; // page 0, will calculate totalPages
+    std::vector<MenuItem> items;
+
+    // Build initial menu
+    buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
+
+    int cursorIndex = 0; // Start at "Confirm"
+
+    // Initial render with full refresh
+    renderUnifiedSetupScreen(items, cursorIndex, true);
+
+    // Auto-confirm timeout: 60 seconds of inactivity
+    unsigned long lastActivityTime = millis();
+    const unsigned long AUTO_CONFIRM_TIMEOUT = 60000; // 60 seconds
+
+    // Navigation loop
+    bool confirmed = false;
+    while (!confirmed) {
+        M5.update();
+
+        // Check for auto-confirm timeout (60 seconds without button press)
+        if (millis() - lastActivityTime >= AUTO_CONFIRM_TIMEOUT) {
+            Serial.println("Auto-confirm: 60 seconds timeout - proceeding with current settings");
+            confirmed = true;
+
+            // Apply fallback if no fonts selected
+            bool anyFontSelected = false;
+            for (bool enabled : fontEnabledLocal) {
+                if (enabled) {
+                    anyFontSelected = true;
+                    break;
+                }
+            }
+            if (!anyFontSelected) {
+                Serial.println("No fonts selected - enabling all fonts as fallback");
+                for (size_t i = 0; i < fontEnabledLocal.size(); i++) {
+                    fontEnabledLocal[i] = true;
+                }
+            }
+
+            config.wakeIntervalMinutes = selectedInterval;
+            config.fontEnabled = fontEnabledLocal;
+            break; // Exit loop
+        }
+
+        // Button UP (BtnL): Move cursor up
+        if (M5.BtnL.wasPressed()) {
+            lastActivityTime = millis(); // Reset timeout
+            Serial.println("BtnL pressed - moving up");
+            do {
+                cursorIndex--;
+                if (cursorIndex < 0) {
+                    cursorIndex = items.size() - 1; // Wrap to last item
+                }
+                // Skip separators and non-clickable labels (but not "Select/Deselect all" which has fontIndex=-2)
+            } while (items[cursorIndex].type == MENU_SEPARATOR ||
+                     (items[cursorIndex].type == MENU_LABEL && items[cursorIndex].fontIndex != -2));
+            renderUnifiedSetupScreen(items, cursorIndex);
+            delay(200);
+        }
+
+        // Button DOWN (BtnR): Move cursor down
+        if (M5.BtnR.wasPressed()) {
+            lastActivityTime = millis(); // Reset timeout
+            Serial.println("BtnR pressed - moving down");
+            do {
+                cursorIndex++;
+                if (cursorIndex >= items.size()) {
+                    cursorIndex = 0; // Wrap to Confirm
+                }
+                // Skip separators and non-clickable labels (but not "Select/Deselect all" which has fontIndex=-2)
+            } while (items[cursorIndex].type == MENU_SEPARATOR ||
+                     (items[cursorIndex].type == MENU_LABEL && items[cursorIndex].fontIndex != -2));
+            renderUnifiedSetupScreen(items, cursorIndex);
+            delay(200);
+        }
+
+        // Button CENTER (BtnP): Select/Confirm
+        if (M5.BtnP.wasPressed()) {
+            lastActivityTime = millis(); // Reset timeout
+            MenuItem& currentItem = items[cursorIndex];
+
+            if (currentItem.type == MENU_CONFIRM) {
+                // Confirm pressed - check if at least one font is selected
+                bool anyFontSelected = false;
+                for (bool enabled : fontEnabledLocal) {
+                    if (enabled) {
+                        anyFontSelected = true;
+                        break;
+                    }
+                }
+
+                // Fallback: if no fonts selected, select all
+                if (!anyFontSelected) {
+                    Serial.println("No fonts selected - enabling all fonts as fallback");
+                    for (size_t i = 0; i < fontEnabledLocal.size(); i++) {
+                        fontEnabledLocal[i] = true;
+                    }
+                }
+
+                // Save and exit
+                confirmed = true;
+                config.wakeIntervalMinutes = selectedInterval;
+                config.fontEnabled = fontEnabledLocal;
+                config.allowDifferentFont = allowDifferentFontLocal;
+                config.allowDifferentMode = allowDifferentModeLocal;
+                Serial.printf("Setup confirmed: %d min, allow font=%s, allow mode=%s, fonts configured\n",
+                             selectedInterval,
+                             config.allowDifferentFont ? "yes" : "no",
+                             config.allowDifferentMode ? "yes" : "no");
+
+            } else if (currentItem.type == MENU_RADIO) {
+                // Radio button: deselect all intervals, select current
+                selectedInterval = currentItem.value;
+                buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
+                Serial.printf("Selected interval: %d min\n", selectedInterval);
+                renderUnifiedSetupScreen(items, cursorIndex);
+
+            } else if (currentItem.type == MENU_LABEL && currentItem.fontIndex == -2) {
+                // "Select/Deselect all" - special clickable label without markers
+                bool newState = !currentItem.selected;
+                for (size_t i = 0; i < fontEnabledLocal.size(); i++) {
+                    fontEnabledLocal[i] = newState;
+                }
+                Serial.printf("Select/Deselect all: %s\n", newState ? "all selected" : "all deselected");
+                buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
+                renderUnifiedSetupScreen(items, cursorIndex);
+
+            } else if (currentItem.type == MENU_CHECKBOX) {
+                if (currentItem.fontIndex == -2) {
+                    // "Select/Deselect all" special checkbox (deprecated, now using MENU_LABEL)
+                    bool newState = !currentItem.selected;
+                    for (size_t i = 0; i < fontEnabledLocal.size(); i++) {
+                        fontEnabledLocal[i] = newState;
+                    }
+                    Serial.printf("Select/Deselect all: %s\n", newState ? "all selected" : "all deselected");
+                } else if (currentItem.fontIndex == -3) {
+                    // "Allow different font" checkbox
+                    allowDifferentFontLocal = !allowDifferentFontLocal;
+                    Serial.printf("Toggled allow different font: %s\n", allowDifferentFontLocal ? "yes" : "no");
+                } else if (currentItem.fontIndex == -4) {
+                    // "Allow different mode" checkbox
+                    allowDifferentModeLocal = !allowDifferentModeLocal;
+                    Serial.printf("Toggled allow different mode: %s\n", allowDifferentModeLocal ? "yes" : "no");
+                } else if (currentItem.fontIndex >= 0) {
+                    // Individual font checkbox
+                    fontEnabledLocal[currentItem.fontIndex] = !fontEnabledLocal[currentItem.fontIndex];
+                    Serial.printf("Toggled font %d: %s\n", currentItem.fontIndex,
+                                 fontEnabledLocal[currentItem.fontIndex] ? "enabled" : "disabled");
+                }
+                buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
+                renderUnifiedSetupScreen(items, cursorIndex);
+
+            } else if (currentItem.type == MENU_PAGE_NAV) {
+                // Page navigation "..."
+                if (currentItem.value == -1) {
+                    // Previous page
+                    pagination.currentPage--;
+                } else {
+                    // Next page
+                    pagination.currentPage++;
+                }
+                buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
+
+                // Position cursor on first item AFTER "Select/Deselect all" in font section
+                // Items: Confirm(0), Sep, Refresh, 15min, 10min, 5min, Sep, When, AllowFont, AllowMode, Sep, Select/Deselect(11), ...
+                // So first item after Select/Deselect is always at index 12
+                cursorIndex = 12;
+
+                Serial.printf("Page navigation: now on page %d/%d, cursor at item %d\n", pagination.currentPage + 1, pagination.totalPages, cursorIndex);
+                renderUnifiedSetupScreen(items, cursorIndex);
+            }
+
+            delay(200);
+        }
+
+        delay(50);
+    }
+
+    Serial.println("=== Unified Setup Complete ===\n");
+}
+
+// ========================================
+// v2.1: Setup Screen - Interval Selection (OLD - DEPRECATED)
+// ========================================
+
+// Interactive interval selection screen
+// Returns: selected interval in minutes (5, 10, or 15)
+int setupScreenIntervalSelection() {
+    Serial.println("\n=== Setup Screen: Interval Selection ===");
+
+    // Build menu items
+    std::vector<MenuItem> items;
+
+    // Item 0: Confirm button
+    items.push_back({MENU_CONFIRM, "Confirm", false, 0});
+
+    // Items 1-3: Radio buttons for intervals
+    items.push_back({MENU_RADIO, "5 min", false, 5});
+    items.push_back({MENU_RADIO, "10 min", false, 10});
+    items.push_back({MENU_RADIO, "15 min", true, 15}); // Default selected
+
+    int cursorIndex = 0; // Start at "Confirm"
+    int scrollOffset = 0; // No scroll needed (only 4 items)
+    int selectedIntervalIndex = 3; // Default: 15 min (index 3)
+
+    // Initial render with full refresh to clear boot screen
+    renderMenuScreen("", items, cursorIndex, scrollOffset, true);
+
+    // Navigation loop
+    bool confirmed = false;
+    while (!confirmed) {
+        M5.update();
+
+        // Button UP (BtnL): Move cursor up
+        if (M5.BtnL.wasPressed()) {
+            Serial.println("BtnL pressed - moving up");
+            cursorIndex--;
+            if (cursorIndex < 0) {
+                cursorIndex = items.size() - 1; // Wrap around to bottom
+            }
+            renderMenuScreen("", items, cursorIndex, scrollOffset);
+            delay(200);
+        }
+
+        // Button DOWN (BtnR): Move cursor down
+        if (M5.BtnR.wasPressed()) {
+            Serial.println("BtnR pressed - moving down");
+            cursorIndex++;
+            if (cursorIndex >= items.size()) {
+                cursorIndex = 0; // Wrap around to top
+            }
+            renderMenuScreen("", items, cursorIndex, scrollOffset);
+            delay(200);
+        }
+
+        // Button CENTER (BtnP): Select/Confirm
+        if (M5.BtnP.wasPressed()) {
+            if (cursorIndex == 0) {
+                // Confirm button pressed - exit
+                confirmed = true;
+                Serial.println("Confirm pressed - exiting interval selection");
+            } else {
+                // Radio button pressed - deselect all, select current
+                for (int i = 1; i < items.size(); i++) {
+                    items[i].selected = false;
+                }
+                items[cursorIndex].selected = true;
+                selectedIntervalIndex = cursorIndex;
+                renderMenuScreen("", items, cursorIndex, scrollOffset);
+                Serial.printf("Selected: %s\n", items[cursorIndex].label.c_str());
+            }
+            delay(200);
+        }
+
+        delay(50);
+    }
+
+    int selectedInterval = items[selectedIntervalIndex].value;
+    Serial.printf("Interval selection confirmed: %d minutes\n", selectedInterval);
+    return selectedInterval;
+}
+
+// ========================================
+// v2.1: Setup Screen - Font Selection
+// ========================================
+
+// Forward declarations needed for font selection
+extern std::vector<String> fontPaths;
+
+// Extract font name from path
+String getFontName(const String& path) {
+    int lastSlash = path.lastIndexOf('/');
+    String filename = path.substring(lastSlash + 1);
+    int lastDot = filename.lastIndexOf('.');
+    if (lastDot > 0) {
+        filename = filename.substring(0, lastDot);
+    }
+    return filename;
+}
+
+// Interactive font selection screen with scroll
+// Modifies config.fontEnabled based on user selection
+void setupScreenFontSelection() {
+    Serial.println("\n=== Setup Screen: Font Selection ===");
+
+    // Build menu items
+    std::vector<MenuItem> items;
+
+    // Item 0: Confirm button
+    items.push_back({MENU_CONFIRM, "Confirm", false, 0});
+
+    // Items 1..N: Checkboxes for each font (all enabled by default)
+    for (size_t i = 0; i < fontPaths.size(); i++) {
+        // Extract font name from path
+        String fontName = getFontName(fontPaths[i]);
+        bool enabled = config.fontEnabled[i];
+        items.push_back({MENU_CHECKBOX, fontName, enabled, 0});
+    }
+
+    int cursorIndex = 0; // Start at "Confirm"
+    int scrollOffset = 0;
+    const int maxVisibleItems = 8; // Max items visible on screen
+    bool firstMove = true; // Flag to detect first cursor move
+
+    // Initial render with full refresh to clear previous screen
+    renderMenuScreen("", items, cursorIndex, scrollOffset, true);
+
+    // Navigation loop
+    bool confirmed = false;
+    while (!confirmed) {
+        M5.update();
+
+        bool cursorMoved = false;
+
+        // Button UP (BtnL): Move cursor up
+        if (M5.BtnL.wasPressed()) {
+            Serial.println("BtnL pressed - moving up");
+
+            // First move away from Confirm: deselect all fonts
+            if (firstMove && cursorIndex == 0) {
+                Serial.println("First move from Confirm - deselecting all fonts");
+                for (size_t i = 1; i < items.size(); i++) {
+                    items[i].selected = false;
+                }
+                firstMove = false;
+            }
+
+            cursorIndex--;
+            if (cursorIndex < 0) {
+                cursorIndex = items.size() - 1; // Wrap to last item
+            }
+            cursorMoved = true;
+            delay(200);
+        }
+
+        // Button DOWN (BtnR): Move cursor down
+        if (M5.BtnR.wasPressed()) {
+            Serial.println("BtnR pressed - moving down");
+
+            // First move away from Confirm: deselect all fonts
+            if (firstMove && cursorIndex == 0) {
+                Serial.println("First move from Confirm - deselecting all fonts");
+                for (size_t i = 1; i < items.size(); i++) {
+                    items[i].selected = false;
+                }
+                firstMove = false;
+            }
+
+            cursorIndex++;
+            // Wrap around: if at last item, go back to Confirm
+            if (cursorIndex >= items.size()) {
+                cursorIndex = 0;
+            }
+
+            cursorMoved = true;
+            delay(200);
+        }
+
+        // Update scroll offset if cursor moved
+        if (cursorMoved) {
+            // Auto-scroll logic: keep cursor in visible area
+            if (cursorIndex < scrollOffset) {
+                // Cursor moved above visible area - scroll up
+                scrollOffset = cursorIndex;
+            } else if (cursorIndex >= scrollOffset + maxVisibleItems) {
+                // Cursor moved below visible area - scroll down
+                scrollOffset = cursorIndex - maxVisibleItems + 1;
+            }
+
+            renderMenuScreen("", items, cursorIndex, scrollOffset);
+        }
+
+        // Button CENTER (BtnP): Toggle checkbox or confirm
+        if (M5.BtnP.wasPressed()) {
+            if (cursorIndex == 0) {
+                // Confirm button pressed - save and exit
+                confirmed = true;
+                Serial.println("Confirm pressed - saving font selections");
+
+                // Update config.fontEnabled from items
+                for (size_t i = 0; i < fontPaths.size(); i++) {
+                    config.fontEnabled[i] = items[i + 1].selected; // +1 because item 0 is Confirm
+                }
+
+                // Count enabled fonts
+                int enabledCount = 0;
+                for (bool enabled : config.fontEnabled) {
+                    if (enabled) enabledCount++;
+                }
+                Serial.printf("Fonts enabled: %d/%d\n", enabledCount, fontPaths.size());
+
+            } else {
+                // Checkbox pressed - toggle
+                items[cursorIndex].selected = !items[cursorIndex].selected;
+                renderMenuScreen("", items, cursorIndex, scrollOffset);
+                Serial.printf("Toggled: %s -> %s\n",
+                             items[cursorIndex].label.c_str(),
+                             items[cursorIndex].selected ? "enabled" : "disabled");
+            }
+            delay(200);
+        }
+
+        delay(50);
+    }
+
+    Serial.println("=== Font Selection Complete ===\n");
+}
+
 // ========================================
 // FT_Face Access Workaround
 // ========================================
@@ -518,17 +1504,6 @@ void testGlyphOutlineAccess(uint32_t codepoint) {
 // STEP 3: Parse and Render Outline
 // ========================================
 
-// Extract font name from path (forward declaration needed)
-String getFontName(const String& path) {
-    int lastSlash = path.lastIndexOf('/');
-    String filename = path.substring(lastSlash + 1);
-    int lastDot = filename.lastIndexOf('.');
-    if (lastDot > 0) {
-        filename = filename.substring(0, lastDot);
-    }
-    return filename;
-}
-
 // Parse glyph outline and store scaled segments
 bool parseGlyphOutline(uint32_t codepoint) {
     // Reset storage
@@ -825,10 +1800,17 @@ void renderGlyphOutline() {
     char codepointStr[32];
     sprintf(codepointStr, "U+%04X", currentGlyphCodepoint);
 
+    // Truncate font name if it exceeds margins (30px left + 30px right = 480px max)
+    // Note: shortenTextIfNeeded() uses bitmap font textSize=3 for measurement (calibrated to match FreeType 24px)
+    String displayFontName = shortenTextIfNeeded(fontName, 480, 3);
+
+    // Now reload FreeType font for drawing labels (same font as glyph, but size 24)
+    canvas.loadFont(fontPaths[currentFontIndex], SD);
+    canvas.createRender(24, 64); // Size 24 for labels
     canvas.setTextSize(24);
     canvas.setTextColor(15);
     canvas.setTextDatum(TC_DATUM);
-    canvas.drawString(fontName, 270, 30); // Top label
+    canvas.drawString(displayFontName, 270, 30); // Top label
 
     canvas.setTextDatum(BC_DATUM);
     canvas.drawString(codepointStr, 270, 930); // Bottom label
@@ -1019,10 +2001,17 @@ void renderGlyphBitmap() {
     char codepointStr[32];
     sprintf(codepointStr, "U+%04X", currentGlyphCodepoint);
 
+    // Truncate font name if it exceeds margins (30px left + 30px right = 480px max)
+    // Note: shortenTextIfNeeded() uses bitmap font textSize=3 for measurement (calibrated to match FreeType 24px)
+    String displayFontName = shortenTextIfNeeded(fontName, 480, 3);
+
+    // Now reload FreeType font for drawing labels (same font as glyph, but size 24)
+    canvas.loadFont(fontPaths[currentFontIndex], SD);
+    canvas.createRender(24, 64); // Size 24 for labels
     canvas.setTextSize(24);
     canvas.setTextColor(15);
     canvas.setTextDatum(TC_DATUM);
-    canvas.drawString(fontName, centerX, 30);
+    canvas.drawString(displayFontName, centerX, 30);
 
     canvas.setTextSize(24);
     canvas.setTextColor(15);
@@ -1209,18 +2198,134 @@ void enterDeepSleep() {
 
     // Configure wake sources:
     // 1) GPIO38 (center button press) - user interaction
-    // 2) Timer (15 minutes) - auto refresh
+    // 2) Timer (config interval) - auto refresh
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_38, LOW); // Wake when button pressed (goes LOW)
 
-    // Enable timer wakeup: 15 minutes = 900 seconds = 900,000,000 microseconds
-    uint64_t wakeup_time_us = 15 * 60 * 1000000ULL; // 15 minutes in microseconds
+    // Enable timer wakeup from config (5, 10, or 15 minutes)
+    uint64_t wakeup_time_us = config.wakeIntervalMinutes * 60 * 1000000ULL; // minutes to microseconds
     esp_sleep_enable_timer_wakeup(wakeup_time_us);
-    Serial.println("Wake sources configured: GPIO38 (button) + Timer (15min)");
+    Serial.printf("Wake sources configured: GPIO38 (button) + Timer (%dmin)\n", config.wakeIntervalMinutes);
 
     Serial.println(">>> Entering deep sleep now...\n");
     delay(100); // Give serial time to flush
 
     // Enter deep sleep
+    esp_deep_sleep_start();
+}
+
+// ========================================
+// Shutdown Screen with QR Code
+// ========================================
+
+// Draw QR code at specified position with specified pixel size
+// Note: pixelSizeX can be different from pixelSizeY to compensate for display aspect ratio
+void drawQRCode(int centerX, int centerY, int pixelSizeY, int pixelSizeX = 0) {
+    if (pixelSizeX == 0) pixelSizeX = pixelSizeY; // Default to square if not specified
+
+    int qrDisplayWidth = QR_SIZE * pixelSizeX;
+    int qrDisplayHeight = QR_SIZE * pixelSizeY;
+    int startX = centerX - qrDisplayWidth / 2;
+    int startY = centerY - qrDisplayHeight / 2;
+
+    Serial.printf("QR Code: size=%d×%d, pixelSize=%d×%d, display=%d×%d, start=(%d,%d)\n",
+                  QR_SIZE, QR_SIZE, pixelSizeX, pixelSizeY, qrDisplayWidth, qrDisplayHeight, startX, startY);
+    Serial.printf("Canvas: width=%d, height=%d\n", canvas.width(), canvas.height());
+
+    // Debug: print ALL 29 rows to verify complete QR data
+    Serial.println("Complete QR code data:");
+    for (int row = 0; row < QR_SIZE; row++) {
+        Serial.printf("Row %2d: ", row);
+        for (int x = 0; x < QR_SIZE; x++) {
+            int byteIndex = row * 4 + (x / 8);
+            int bitIndex = 7 - (x % 8);
+            uint8_t byte = pgm_read_byte(&qrcode_data[byteIndex]);
+            bool isBlack = (byte >> bitIndex) & 1;
+            Serial.print(isBlack ? "█" : " ");
+        }
+        Serial.println();
+    }
+
+    // Draw QR code pixel by pixel
+    int blackModules = 0;
+    int pixelsDrawn = 0;
+
+    for (int moduleY = 0; moduleY < QR_SIZE; moduleY++) {
+        for (int moduleX = 0; moduleX < QR_SIZE; moduleX++) {
+            // Read bit from PROGMEM
+            int byteIndex = moduleY * 4 + (moduleX / 8);
+            int bitIndex = 7 - (moduleX % 8);
+            uint8_t byte = pgm_read_byte(&qrcode_data[byteIndex]);
+            bool isBlack = (byte >> bitIndex) & 1;
+
+            // Draw this module as pixelSizeX × pixelSizeY block using drawPixel
+            if (isBlack) {
+                blackModules++;
+                int baseX = startX + moduleX * pixelSizeX;
+                int baseY = startY + moduleY * pixelSizeY;
+
+                // Fill the pixelSizeX × pixelSizeY rectangle pixel by pixel
+                for (int dy = 0; dy < pixelSizeY; dy++) {
+                    for (int dx = 0; dx < pixelSizeX; dx++) {
+                        canvas.drawPixel(baseX + dx, baseY + dy, 15);
+                        pixelsDrawn++;
+                    }
+                }
+            }
+        }
+    }
+    Serial.printf("QR Code drawing complete: %d black modules, %d pixels drawn\n", blackModules, pixelsDrawn);
+}
+
+// Show shutdown screen with QR code and power off
+void shutdownWithScreen() {
+    Serial.println("\n=== Shutdown Requested (Long Press) ===");
+
+    // Use existing canvas but unload any FreeType font
+    canvas.unloadFont(); // Remove FreeType renderer
+    canvas.fillCanvas(0); // White background
+
+    // Draw QR code first
+    Serial.println("Drawing QR code...");
+    drawQRCode(270, 480, 6, 6); // QR code: 6×6 px per module
+
+    // Draw text with built-in bitmap font (no FreeType)
+    Serial.println("Drawing text labels...");
+    canvas.setFreeFont(NULL); // Force use of built-in font
+    canvas.setTextFont(1); // Font 1 = default bitmap font
+    canvas.setTextSize(2); // Bitmap font size 2 = 16px height
+    canvas.setTextColor(15); // Black text
+
+    // Top label: "PaperSpecimen"
+    canvas.setTextDatum(TC_DATUM);
+    canvas.drawString("PaperSpecimen", 270, 30);
+    Serial.println("Top label drawn");
+
+    // Bottom label: "v2.1.3"
+    canvas.setTextDatum(BC_DATUM);
+    canvas.drawString("v2.1.3", 270, 930);
+    Serial.println("Bottom label drawn");
+
+    // Full refresh to clear any ghosting
+    canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+    Serial.println("Shutdown screen displayed with QR code");
+
+    delay(2000); // Show for 2 seconds
+
+    // Deep sleep indefinitely (no timer wake)
+    Serial.println("Entering deep sleep (shutdown mode)");
+
+    // Configure wake on button press only
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_38, 0); // GPIO38 = center button, LOW = pressed
+
+    // Put display to sleep
+    M5.EPD.Sleep();
+
+    // Power management
+    digitalWrite(M5EPD_MAIN_PWR_PIN, LOW);
+    gpio_hold_en((gpio_num_t)M5EPD_MAIN_PWR_PIN);
+    gpio_deep_sleep_hold_en();
+
+    delay(100);
     esp_deep_sleep_start();
 }
 
@@ -1308,15 +2413,24 @@ void setup() {
         M5.EPD.Clear(true);     // Clear with full refresh
         Serial.println("Display initialized (vertical orientation)");
 
-        canvas.fillCanvas(15); // white background
-        canvas.setTextSize(4);
-        canvas.setTextColor(0); // black text
-        canvas.setTextDatum(CC_DATUM);
-        canvas.drawString("PaperSpecimen", 270, 400);
-        canvas.setTextSize(2);
-        canvas.drawString("Booting...", 270, 500);
+        canvas.fillCanvas(0); // white background
+        canvas.setTextSize(2); // Bitmap font size 2 = 16px height (consistent with UI)
+        canvas.setTextColor(15); // black text
+
+        // Top label: "PaperSpecimen" (same position as font name)
+        canvas.setTextDatum(TC_DATUM);
+        canvas.drawString("PaperSpecimen", 270, 30);
+
+        // QR code in center
+        drawQRCode(270, 480, 6, 6); // 6×6 px per module
+
+        // Bottom label: "v2.1.3" (same position as unicode)
+        canvas.setTextDatum(BC_DATUM);
+        canvas.drawString("v2.1.3", 270, 930);
+
         canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-        Serial.println("Boot message displayed");
+        Serial.println("Boot splash v2.1.3 with QR code displayed");
+        delay(5000); // Show boot splash for 5 seconds
     } else {
         Serial.println("Skipping boot screen (wake from sleep)");
     }
@@ -1382,6 +2496,68 @@ void setup() {
         while(1) delay(1000); // halt
     }
 
+    // v2.1.3: Config handling
+    if (!isWakeFromSleep) {
+        // COLD BOOT: Always run unified setup screen
+        Serial.println("\n=== Cold Boot: Running Setup ===");
+
+        // Initialize default config
+        initDefaultConfig(fontPaths.size());
+
+        // Unified setup screen (interval + font selection in one)
+        setupScreenUnified();
+
+        // Save config to SD (will be used for wake from sleep)
+        if (saveConfig()) {
+            Serial.println("Setup complete - config saved for wake cycles");
+        } else {
+            Serial.println("WARNING: Failed to save config file");
+        }
+    } else {
+        // WAKE FROM SLEEP: Load config from previous session
+        Serial.println("\n=== Wake from Sleep: Loading Config ===");
+        bool configLoaded = loadConfig();
+
+        if (!configLoaded) {
+            // Should not happen - use defaults
+            Serial.println("WARNING: Config file missing after wake - using defaults");
+            initDefaultConfig(fontPaths.size());
+        } else {
+            Serial.println("Config loaded successfully");
+        }
+    }
+
+    // Apply config: filter fontPaths to only enabled fonts (always, for both cold boot and wake)
+    Serial.println("\n=== Applying Config ===");
+    std::vector<String> enabledFontPaths;
+    for (size_t i = 0; i < fontPaths.size() && i < config.fontEnabled.size(); i++) {
+        if (config.fontEnabled[i]) {
+            enabledFontPaths.push_back(fontPaths[i]);
+            Serial.printf("  Enabled: %s\n", fontPaths[i].c_str());
+        } else {
+            Serial.printf("  Disabled: %s\n", fontPaths[i].c_str());
+        }
+    }
+
+    // Replace fontPaths with filtered list
+    fontPaths = enabledFontPaths;
+    Serial.printf("Active fonts: %d\n", fontPaths.size());
+
+    // Check if at least one font is enabled
+    if (fontPaths.empty()) {
+        Serial.println("ERROR: No fonts enabled in config!");
+        canvas.fillCanvas(15);
+        canvas.setTextColor(0);
+        canvas.setTextDatum(CC_DATUM);
+        canvas.setTextSize(3);
+        canvas.drawString("NO FONTS ENABLED", 270, 400);
+        canvas.setTextSize(2);
+        canvas.drawString("Delete /paperspecimen.cfg", 270, 500);
+        canvas.drawString("and restart to reconfigure", 270, 540);
+        canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+        while(1) delay(1000); // halt
+    }
+
     // Handle wake from sleep scenarios
     if (isWakeFromSleep && rtcState.isValid) {
         // STEP 5: Restore view mode from RTC memory
@@ -1389,9 +2565,39 @@ void setup() {
         Serial.printf("Restored view mode: %s\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
 
         if (isAutoWake) {
-            // Auto-wake from RTC alarm: randomize BOTH font and glyph (keep view mode)
-            Serial.println("\n=== Auto-wake: Generating random font + glyph ===");
-            randomFont(); // This loads random font and random glyph
+            // Auto-wake from RTC alarm: randomize based on config settings
+            Serial.println("\n=== Auto-wake: Applying randomization settings ===");
+            Serial.printf("Allow different font: %s\n", config.allowDifferentFont ? "yes" : "no");
+            Serial.printf("Allow different mode: %s\n", config.allowDifferentMode ? "yes" : "no");
+
+            // Randomize font if allowed
+            if (config.allowDifferentFont) {
+                currentFontIndex = random(0, fontPaths.size());
+                Serial.printf("Random font selected: %d/%d\n", currentFontIndex + 1, fontPaths.size());
+            } else {
+                // Keep current font from RTC memory
+                currentFontIndex = rtcState.currentFontIndex;
+                if (currentFontIndex >= fontPaths.size()) {
+                    Serial.println("WARNING: Saved font index out of range, resetting to 0");
+                    currentFontIndex = 0;
+                }
+                Serial.printf("Keeping current font: %d/%d\n", currentFontIndex + 1, fontPaths.size());
+            }
+
+            // Randomize mode if allowed
+            if (config.allowDifferentMode) {
+                currentViewMode = (random(0, 2) == 0) ? BITMAP : OUTLINE;
+                Serial.printf("Random mode selected: %s\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+            } else {
+                // Keep current mode from RTC memory (already restored above)
+                Serial.printf("Keeping current mode: %s\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+            }
+
+            // Load font and generate random glyph
+            if (loadCurrentFont()) {
+                currentGlyphCodepoint = getRandomGlyphCodepoint();
+                renderGlyph();
+            }
         } else {
             // Button wake: restore previous state
             Serial.println("\n=== Restoring state from RTC memory ===");
@@ -1492,15 +2698,26 @@ void loop() {
         delay(300); // Simple delay to prevent multiple triggers
     }
 
-    // STEP 5: Button P - Long press = toggle view, Short press = random glyph
+    // STEP 5: Button P - Very long press (5s) = shutdown, Long press = toggle view, Short press = random glyph
     static unsigned long btnPressStartTime = 0;
     static bool btnPWasDown = false;
+    const unsigned long SHUTDOWN_PRESS_THRESHOLD = 5000; // 5 seconds for shutdown
     const unsigned long LONG_PRESS_THRESHOLD = 800; // 800ms for long press
 
     if (M5.BtnP.isPressed() && !btnPWasDown) {
         // Button just pressed
         btnPressStartTime = millis();
         btnPWasDown = true;
+    }
+
+    // Check for shutdown (5 seconds) while button is held
+    if (M5.BtnP.isPressed() && btnPWasDown) {
+        unsigned long pressDuration = millis() - btnPressStartTime;
+        if (pressDuration >= SHUTDOWN_PRESS_THRESHOLD) {
+            // Very long press (5s): Shutdown with screen
+            btnPWasDown = false; // Reset state
+            shutdownWithScreen(); // This function never returns
+        }
     }
 
     if (!M5.BtnP.isPressed() && btnPWasDown) {
@@ -1510,7 +2727,7 @@ void loop() {
         lastButtonActivityTime = millis();
 
         if (pressDuration >= LONG_PRESS_THRESHOLD) {
-            // Long press: Toggle view mode
+            // Long press (800ms): Toggle view mode
             Serial.println("\n>>> Button P LONG PRESS - Toggle view mode");
             currentViewMode = (currentViewMode == BITMAP) ? OUTLINE : BITMAP;
             Serial.printf("Switched to %s mode\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
