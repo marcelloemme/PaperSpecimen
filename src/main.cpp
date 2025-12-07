@@ -1055,6 +1055,7 @@ const unsigned long FULL_REFRESH_TIMEOUT_MS = 10000; // 10 seconds from first pa
 unsigned long lastFullRefreshTime = 0;
 unsigned long lastButtonActivityTime = 0;
 const unsigned long DEEP_SLEEP_TIMEOUT_MS = 10000; // 10 seconds from last full refresh
+bool isAutoWakeSession = false; // Flag: if true, skip idle wait and sleep immediately after render
 
 // View mode enumeration
 enum ViewMode {
@@ -2353,19 +2354,22 @@ void setup() {
     bool isAutoWake = false;
 
     if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
-        // Woke from timer (15 minute auto-wake)
+        // Woke from timer (auto-wake)
         isWakeFromSleep = true;
         isAutoWake = true;
+        isAutoWakeSession = true; // Flag to skip idle wait and sleep immediately
         Serial.println("\n\n=== PaperSpecimen Auto-Wake (Timer) ===");
-        Serial.println("Woke by ESP32 timer after 15 minutes");
+        Serial.println("Woke by ESP32 timer (configured interval)");
     } else if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
         // Woke from button press
         isWakeFromSleep = true;
         isAutoWake = false;
+        isAutoWakeSession = false; // Normal behavior: wait for user interaction
         Serial.println("\n\n=== PaperSpecimen Wake from Deep Sleep (Button) ===");
         Serial.println("Woke by GPIO38 (center button)");
     } else {
         // Cold boot (reset or first power on)
+        isAutoWakeSession = false; // Normal behavior: wait for user interaction
         Serial.println("\n\n=== PaperSpecimen Cold Boot ===");
     }
 
@@ -2444,15 +2448,17 @@ void setup() {
     lastFullRefreshTime = millis();
     lastButtonActivityTime = millis();
 
-    // Initialize random seed with multiple entropy sources
-    uint32_t seed = 0;
-    for(int i = 0; i < 10; i++) {
-        seed ^= analogRead(0);
-        delayMicroseconds(100);
+    // Initialize random seed (only on cold boot, not on wake - wake has its own seed init above)
+    if (!isWakeFromSleep) {
+        uint32_t seed = 0;
+        for(int i = 0; i < 10; i++) {
+            seed ^= analogRead(0);
+            delayMicroseconds(100);
+        }
+        seed ^= millis() ^ micros();
+        randomSeed(seed);
+        Serial.printf("Random seed initialized: 0x%08X\n", seed);
     }
-    seed ^= millis() ^ micros();
-    randomSeed(seed);
-    Serial.printf("Random seed initialized: 0x%08X\n", seed);
 
     // Test microSD access
     Serial.println("\n=== Testing microSD ===");
@@ -2586,7 +2592,8 @@ void setup() {
 
             // Randomize mode if allowed
             if (config.allowDifferentMode) {
-                currentViewMode = (random(0, 2) == 0) ? BITMAP : OUTLINE;
+                // Use ESP32 hardware RNG instead of Arduino random() which has issues after deep sleep
+                currentViewMode = ((esp_random() % 2) == 0) ? BITMAP : OUTLINE;
                 Serial.printf("Random mode selected: %s\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
             } else {
                 // Keep current mode from RTC memory (already restored above)
@@ -2623,6 +2630,17 @@ void setup() {
     } else {
         // Cold boot: Load first font and display random glyph
         Serial.println("\n=== Loading initial font ===");
+
+        // Randomize initial view mode if allowed (applies to cold boot only)
+        if (config.allowDifferentMode) {
+            // Use ESP32 hardware RNG for better randomness
+            currentViewMode = ((esp_random() % 2) == 0) ? BITMAP : OUTLINE;
+            Serial.printf("Initial random mode selected: %s\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+        } else {
+            // Keep default BITMAP mode
+            Serial.printf("Initial mode (default): %s\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+        }
+
         if (loadCurrentFont()) {
             currentGlyphCodepoint = getRandomGlyphCodepoint();
             renderGlyph();
@@ -2670,14 +2688,24 @@ void loop() {
         lastFullRefreshTime = millis(); // Track for power management
     }
 
-    // Power management: Enter deep sleep after 10s from last full refresh if no button activity
+    // Power management: Enter deep sleep based on context
+    // Special case: Auto-wake session (timer wake) - sleep immediately after full refresh
+    if (isAutoWakeSession && millis() - lastFullRefreshTime >= 500) {
+        // Give 500ms for full refresh to complete, then sleep immediately
+        // No need to wait 10s idle time - this is automatic operation
+        Serial.println(">>> Auto-wake session: entering deep sleep immediately after refresh");
+        enterDeepSleep(); // This function never returns (enters deep sleep)
+    }
+
+    // Normal case: Enter deep sleep after 10s from last full refresh if no button activity
     unsigned long timeSinceFullRefresh = millis() - lastFullRefreshTime;
     unsigned long timeSinceButtonActivity = millis() - lastButtonActivityTime;
 
     // Enter deep sleep only if:
     // 1) 10 seconds passed since last full refresh
     // 2) No button activity after the last full refresh
-    if (timeSinceFullRefresh >= DEEP_SLEEP_TIMEOUT_MS &&
+    if (!isAutoWakeSession &&
+        timeSinceFullRefresh >= DEEP_SLEEP_TIMEOUT_MS &&
         lastButtonActivityTime <= lastFullRefreshTime) {
         enterDeepSleep(); // This function never returns (enters deep sleep)
     }
@@ -2685,6 +2713,7 @@ void loop() {
     // Button L (Wheel DOWN): Previous font (keep same glyph)
     if (M5.BtnL.wasPressed()) {
         lastButtonActivityTime = millis();
+        isAutoWakeSession = false; // User interaction: cancel auto-wake session immediate sleep
         Serial.println("\n>>> Button L (DOWN) pressed - Previous font");
         previousFont();
         delay(300); // Simple delay to prevent multiple triggers
@@ -2693,6 +2722,7 @@ void loop() {
     // Button R (Wheel UP): Next font (keep same glyph)
     if (M5.BtnR.wasPressed()) {
         lastButtonActivityTime = millis();
+        isAutoWakeSession = false; // User interaction: cancel auto-wake session immediate sleep
         Serial.println("\n>>> Button R (UP) pressed - Next font");
         nextFont();
         delay(300); // Simple delay to prevent multiple triggers
@@ -2725,6 +2755,7 @@ void loop() {
         unsigned long pressDuration = millis() - btnPressStartTime;
         btnPWasDown = false;
         lastButtonActivityTime = millis();
+        isAutoWakeSession = false; // User interaction: cancel auto-wake session immediate sleep
 
         if (pressDuration >= LONG_PRESS_THRESHOLD) {
             // Long press (800ms): Toggle view mode
