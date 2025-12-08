@@ -10,12 +10,12 @@ Visualize TrueType glyphs in high-quality anti-aliased bitmap or detailed vector
 
 ### Dual Rendering Modes
 
-**Bitmap Mode** (default)
+**Bitmap Mode**
 - Custom FreeType rendering with 16-level grayscale anti-aliasing
 - Smooth, high-quality glyph visualization
 - Per-glyph auto-scaling to 375px target size
 
-**Outline Mode** (toggle via setup)
+**Outline Mode**
 - Vector outline visualization with control points
 - On-curve points: filled black circles
 - Off-curve points: hollow circles (Bézier control points)
