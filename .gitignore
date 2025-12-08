@@ -3,8 +3,8 @@
 .vscode/
 *.pyc
 
-# Build artifacts
-*.bin
+# Build artifacts (except root .bin for releases)
+.pio/**/*.bin
 *.elf
 *.map
 

@@ -96,6 +96,7 @@ On first boot (or after reset), interactive setup screen allows you to configure
 - **Device**: M5Paper (not M5PaperS3)
 - **MicroSD**: FAT32 formatted with `/fonts` directory
 - **Fonts**: TrueType (.ttf) files
+- **Optional**: [M5Launcher](https://github.com/bmorcelli/M5Stack-Launcher) for easy app management
 
 ## Setup
 
@@ -119,14 +120,20 @@ Example structure:
 
 ### 2. Flash Firmware
 
-**Using PlatformIO:**
+**Option A: Using M5Launcher** (easiest):
+1. Download `PaperSpecimen.bin` from this repository
+2. Copy to SD card `/launcher/apps/` directory
+3. Boot M5Paper with M5Launcher installed
+4. Select PaperSpecimen from launcher menu
+
+**Option B: Using PlatformIO:**
 ```bash
 pio run --target upload
 ```
 
-**Using pre-compiled binary:**
+**Option C: Using pre-compiled binary:**
 ```bash
-esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x10000 firmware.bin
+esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x10000 PaperSpecimen.bin
 ```
 
 ### 3. Insert SD Card and Power On
