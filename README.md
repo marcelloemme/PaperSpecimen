@@ -4,7 +4,7 @@
 
 Visualize TrueType glyphs in high-quality anti-aliased bitmap or detailed vector outline mode with Bézier construction lines. Configure fonts, refresh intervals, and standby behavior with an intuitive UI. Enjoy weeks of battery life with intelligent deep sleep.
 
-**Current version: v2.1.3**
+**Current version: v2.2**
 
 ## Features
 
@@ -32,12 +32,19 @@ On first boot (or after reset), interactive setup screen allows you to configure
    - 10 minutes
    - 5 minutes
 
-2. **When in Standby** - Behavior when auto-waking from sleep:
+2. **Customize Unicode ranges** (v2.2+) - Select which character sets to use:
+   - Opens second configuration page
+   - 28 Unicode ranges available (Latin, Greek, Cyrillic, Arabic, CJK, symbols, etc.)
+   - Select/Deselect all for quick configuration
+   - First 6 ranges enabled by default (Basic Latin + Latin-1)
+   - Multi-page navigation (14 ranges per page)
+
+3. **When in Standby** - Behavior when auto-waking from sleep:
    - ✓ Allow different font - Randomly select from enabled fonts (default: ON)
    - ✓ Allow different mode - Randomly switch between bitmap/outline (default: ON)
    - Both OFF: Maintains current font and display mode
 
-3. **Font Selection** - Enable/disable individual fonts:
+4. **Font Selection** - Enable/disable individual fonts:
    - Select/Deselect all - Quick toggle for all fonts
    - Individual font checkboxes
    - Multi-page navigation for many fonts (5+ fonts)
@@ -49,9 +56,10 @@ On first boot (or after reset), interactive setup screen allows you to configure
 - To reconfigure: press reset button on the back and restart (config will be recreated automatically)
 
 **Navigation:**
-- `<<<` / `>>>` - Previous/next page (when 6+ fonts)
+- `<<<` / `>>>` - Previous/next page (fonts: 6+ fonts, Unicode ranges: 2 pages)
 - Wheel UP/DOWN - Move cursor
 - Wheel PRESS - Toggle selection / Confirm
+- "Customize Unicode ranges" - Opens second configuration page
 
 ### Boot & Shutdown Screens (v2.1.1+)
 
@@ -70,7 +78,8 @@ On first boot (or after reset), interactive setup screen allows you to configure
 - **Per-glyph scaling**: Each glyph scales independently to fill screen optimally (375px max)
 - **Smart refresh**: Partial refresh for speed, automatic full refresh every 5 updates or 10 seconds
 - **Ghosting prevention**: Full refresh on boot and periodically during use
-- **Unicode exploration**: Random glyph selection from 9 common Unicode ranges
+- **Unicode exploration**: Random glyph selection from user-configured Unicode ranges (28 total available, 6 enabled by default)
+- **Smart fallback**: Automatically finds alternative glyphs when font doesn't support selected ranges
 - **Long name truncation**: Font names truncated with "..." if exceeding screen margins
 
 ### Power Management
@@ -163,31 +172,45 @@ The device will:
 - Wake reason (timer, button, cold boot)
 - Battery level on wake from sleep
 
-## Unicode Ranges
+## Unicode Ranges (v2.2)
 
-Random glyph selection currently includes these ranges (190 total characters):
+Random glyph selection uses **user-configurable Unicode ranges**. 28 ranges available, 6 enabled by default.
 
-**Basic Latin:**
-- Uppercase letters (A-Z)
-- Lowercase letters (a-z)
-- Digits (0-9)
-- Basic punctuation (!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~)
+**Default ranges** (enabled on first boot):
+1. Latin Uppercase (U+0041-005A) - A-Z
+2. Latin Lowercase (U+0061-007A) - a-z
+3. Digits (U+0030-0039) - 0-9
+4. Basic Punctuation (U+0021-002F) - !"#$%&'()*+,-./
+5. Latin-1 Punctuation (U+00A1-00BF) - ¡-¿
+6. Latin-1 Letters (U+00C0-00FF) - À-ÿ
 
-**Latin-1 Supplement:**
-- Extended punctuation (¡-¿)
-- Accented letters (À-ÿ)
+**Additional ranges** (disabled by default, enable via configuration):
+- Latin Extended-A/B - Extended European letters
+- Greek and Coptic - Α-Ω, α-ω
+- Cyrillic - А-Я, а-я (Russian, Bulgarian, etc.)
+- Hebrew - א-ת
+- Arabic - ا-ي
+- Devanagari - Hindi script
+- Thai - ก-ฮ
+- Georgian - ა-ჰ
+- Hiragana - Japanese phonetic (あ-ん)
+- Katakana - Japanese phonetic (ア-ン)
+- CJK Ideographs - Chinese/Japanese/Korean characters
+- Hangul - Korean syllables
+- Mathematical Operators, Arrows, Currency Symbols
+- Box Drawing, Block Elements, Geometric Shapes
+- Miscellaneous Symbols
 
-**Future expansion** (planned for v2.2):
-- User-configurable Unicode block selection
-- Greek, Cyrillic, Arabic, Hebrew
-- Currency symbols, Math operators, Arrows
-- Emoji, Box drawing, Geometric shapes
+**Smart behavior:**
+- Only enabled ranges are used for random glyph generation
+- If a font doesn't have glyphs in selected ranges, alternative glyphs are automatically found
+- Configuration persists across reboots in `/paperspecimen.cfg`
 
 ## Technical Specifications
 
-### Memory Usage (v2.1.3)
-- **Flash**: 86.4% (1,132,153 / 1,310,720 bytes) - ~174 KB free
-- **RAM**: 1.3% (57,868 / 4,521,984 bytes)
+### Memory Usage (v2.2)
+- **Flash**: 87.0% (1,139,757 / 1,310,720 bytes) - ~171 KB free
+- **RAM**: 1.3% (57,892 / 4,521,984 bytes)
 - **PSRAM**: Used for large glyph rendering
 
 ### Display Configuration
@@ -219,6 +242,10 @@ Random glyph selection currently includes these ranges (190 total characters):
 1                     # Font 2 enabled
 0                     # Font 3 disabled
 ...                   # One line per font
+---                   # Separator (v2.2+)
+1                     # Range 0 enabled (Latin Uppercase)
+1                     # Range 1 enabled (Latin Lowercase)
+...                   # 28 total range flags
 ```
 
 **To reset:** Press reset button on the back and restart device (config will be recreated automatically)
@@ -312,6 +339,7 @@ struct AppConfig {
     bool allowDifferentFont;          // Random font on wake
     bool allowDifferentMode;          // Random mode on wake
     std::vector<bool> fontEnabled;    // Per-font enable flags
+    std::vector<bool> rangeEnabled;   // v2.2: Per-range enable flags (28 total)
 };
 ```
 
@@ -385,7 +413,17 @@ RTC_DATA_ATTR struct {
 
 ## Version History
 
-### v2.1.3 (Current)
+### v2.2 (Current)
+- **Unicode ranges configuration**: User-selectable character sets
+  - 28 Unicode ranges available (Latin, Greek, Cyrillic, Arabic, CJK, symbols, etc.)
+  - Second configuration page with multi-page navigation (14 ranges per page)
+  - Select/Deselect all for quick configuration
+  - First 6 ranges enabled by default (Basic Latin + Latin-1)
+  - Smart fallback: automatically finds alternative glyphs when font doesn't support selected ranges
+- **Config persistence**: Unicode range preferences saved to `/paperspecimen.cfg`
+- **Backward compatibility**: Old config files automatically migrated with default ranges
+
+### v2.1.3
 - **Standby behavior configuration**: "When in standby" options
   - Allow different font (random font selection on wake)
   - Allow different mode (random bitmap/outline toggle on wake)
@@ -432,13 +470,11 @@ RTC_DATA_ATTR struct {
 
 ## Roadmap
 
-### v2.2 (Planned)
-- **Unicode block configuration**: User-selectable character ranges
-  - Greek, Cyrillic, Arabic, Hebrew
-  - Currency, Math, Arrows, Emoji
-  - Geometric shapes, Box drawing
-- **Enhanced UI**: Second configuration page for Unicode blocks
-- **Smart fallback**: Skip unavailable ranges per font
+### Future Ideas
+- **Battery logging**: Track voltage and uptime over time
+- **Font metadata display**: Show font family, style, license info
+- **Custom glyph lists**: User-defined character sequences
+- **Export functionality**: Save specimens as images
 
 ## Credits
 

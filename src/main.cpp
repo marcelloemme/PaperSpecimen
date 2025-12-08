@@ -52,6 +52,52 @@ const uint8_t qrcode_data[] PROGMEM = {
 };
 
 // ========================================
+// v2.2: Unicode Ranges
+// ========================================
+// Unicode ranges for random glyph selection
+struct UnicodeRange {
+    uint32_t start;
+    uint32_t end;
+    const char* name;
+};
+
+// v2.2: Expanded Unicode ranges (28 total, user-customizable)
+const UnicodeRange glyphRanges[] = {
+    // Original 6 ranges (enabled by default)
+    {0x0041, 0x005A, "Latin Uppercase (U+0041-005A)"},
+    {0x0061, 0x007A, "Latin Lowercase (U+0061-007A)"},
+    {0x0030, 0x0039, "Digits (U+0030-0039)"},
+    {0x0021, 0x002F, "Basic Punctuation (U+0021-002F)"},
+    {0x00A1, 0x00BF, "Latin-1 Punctuation (U+00A1-00BF)"},
+    {0x00C0, 0x00FF, "Latin-1 Letters (U+00C0-00FF)"},
+
+    // New ranges (22 additional - disabled by default)
+    {0x0100, 0x017F, "Latin Extended-A (U+0100-017F)"},
+    {0x0180, 0x024F, "Latin Extended-B (U+0180-024F)"},
+    {0x0370, 0x03FF, "Greek and Coptic (U+0370-03FF)"},
+    {0x0400, 0x04FF, "Cyrillic (U+0400-04FF)"},
+    {0x0590, 0x05FF, "Hebrew (U+0590-05FF)"},
+    {0x0600, 0x06FF, "Arabic (U+0600-06FF)"},
+    {0x0900, 0x097F, "Devanagari (U+0900-097F)"},
+    {0x0E00, 0x0E7F, "Thai (U+0E00-0E7F)"},
+    {0x10A0, 0x10FF, "Georgian (U+10A0-10FF)"},
+    {0x3040, 0x309F, "Hiragana (U+3040-309F)"},
+    {0x30A0, 0x30FF, "Katakana (U+30A0-30FF)"},
+    {0x4E00, 0x9FFF, "CJK Ideographs (U+4E00-9FFF)"},
+    {0xAC00, 0xD7AF, "Hangul (U+AC00-D7AF)"},
+    {0x2000, 0x206F, "General Punctuation (U+2000-206F)"},
+    {0x20A0, 0x20CF, "Currency Symbols (U+20A0-20CF)"},
+    {0x2100, 0x214F, "Letterlike Symbols (U+2100-214F)"},
+    {0x2190, 0x21FF, "Arrows (U+2190-21FF)"},
+    {0x2200, 0x22FF, "Mathematical Operators (U+2200-22FF)"},
+    {0x2500, 0x257F, "Box Drawing (U+2500-257F)"},
+    {0x2580, 0x259F, "Block Elements (U+2580-259F)"},
+    {0x25A0, 0x25FF, "Geometric Shapes (U+25A0-25FF)"},
+    {0x2600, 0x26FF, "Miscellaneous Symbols (U+2600-26FF)"},
+};
+const int numGlyphRanges = sizeof(glyphRanges) / sizeof(glyphRanges[0]);
+
+// ========================================
 // v2.1: Configuration Structure
 // ========================================
 struct AppConfig {
@@ -59,6 +105,7 @@ struct AppConfig {
     std::vector<bool> fontEnabled; // Per-font enable/disable flags
     bool allowDifferentFont;       // Allow random font on wake (default: true)
     bool allowDifferentMode;       // Allow random mode (outline/bitmap) on wake (default: true)
+    std::vector<bool> rangeEnabled; // v2.2: Per-range enable flags (28 total)
 };
 
 // Global config instance
@@ -111,21 +158,49 @@ bool loadConfig() {
     config.allowDifferentMode = (line == "1" || line == "true");
     Serial.printf("Allow different mode: %s\n", config.allowDifferentMode ? "yes" : "no");
 
-    // Read font enable flags (remaining lines, one per font)
+    // Read font enable flags (next N lines, where N = number of fonts)
     config.fontEnabled.clear();
     int fontIndex = 0;
     while (file.available()) {
         line = file.readStringUntil('\n');
         line.trim();
         if (line.length() > 0) {
+            // Check if this is a separator line (range flags follow)
+            if (line == "---") {
+                break; // Stop reading font flags, move to range flags
+            }
             bool enabled = (line == "1" || line == "true");
             config.fontEnabled.push_back(enabled);
             fontIndex++;
         }
     }
 
+    // v2.2: Read Unicode range enable flags (remaining lines, or use defaults if not present)
+    config.rangeEnabled.clear();
+    int rangeIndex = 0;
+    bool foundRangeFlags = false;
+    while (file.available()) {
+        line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() > 0) {
+            bool enabled = (line == "1" || line == "true");
+            config.rangeEnabled.push_back(enabled);
+            rangeIndex++;
+            foundRangeFlags = true;
+        }
+    }
+
+    // If no range flags found in file (old config format), use defaults
+    if (!foundRangeFlags) {
+        Serial.println("No range flags in config - using defaults (first 6 enabled)");
+        for (int i = 0; i < numGlyphRanges; i++) {
+            config.rangeEnabled.push_back(i < 6);
+        }
+    }
+
     file.close();
-    Serial.printf("Loaded %d font enable flags\n", config.fontEnabled.size());
+    Serial.printf("Loaded %d font enable flags, %d range enable flags\n",
+                  config.fontEnabled.size(), config.rangeEnabled.size());
     Serial.println("=== Config Loaded Successfully ===\n");
     return true;
 }
@@ -158,6 +233,13 @@ bool saveConfig() {
     }
     Serial.printf("Saved %d font enable flags\n", config.fontEnabled.size());
 
+    // v2.2: Write separator and Unicode range enable flags
+    file.println("---");
+    for (size_t i = 0; i < config.rangeEnabled.size(); i++) {
+        file.println(config.rangeEnabled[i] ? "1" : "0");
+    }
+    Serial.printf("Saved %d range enable flags\n", config.rangeEnabled.size());
+
     file.close();
     Serial.println("=== Config Saved Successfully ===\n");
     return true;
@@ -172,11 +254,18 @@ void initDefaultConfig(int numFonts) {
     for (int i = 0; i < numFonts; i++) {
         config.fontEnabled.push_back(true); // All fonts enabled by default
     }
-    Serial.printf("Default config initialized: %d min, allow font=%s, allow mode=%s, %d fonts (all enabled)\n",
+
+    // v2.2: Initialize Unicode range flags (first 6 enabled by default)
+    config.rangeEnabled.clear();
+    for (int i = 0; i < numGlyphRanges; i++) {
+        config.rangeEnabled.push_back(i < 6); // First 6 ranges enabled, rest disabled
+    }
+
+    Serial.printf("Default config initialized: %d min, allow font=%s, allow mode=%s, %d fonts (all enabled), %d ranges (first 6 enabled)\n",
                   config.wakeIntervalMinutes,
                   config.allowDifferentFont ? "yes" : "no",
                   config.allowDifferentMode ? "yes" : "no",
-                  numFonts);
+                  numFonts, numGlyphRanges);
 }
 
 // ========================================
@@ -324,7 +413,10 @@ void drawMenuItem(int y, MenuItem& item, bool isCursor) {
             // Draw checkbox + label with space (shorten font names if needed)
             drawCheckbox(checkboxX, y, item.selected);
             canvas.setTextDatum(CL_DATUM);
-            String displayLabel = shortenTextIfNeeded(item.label, UI_MAX_TEXT_WIDTH);
+            // Only shorten text for font names (fontIndex >= 0), not for settings checkboxes
+            String displayLabel = (item.fontIndex >= 0)
+                ? shortenTextIfNeeded(item.label, UI_MAX_TEXT_WIDTH)
+                : item.label;
             canvas.drawString(displayLabel, checkboxX + 40, y + UI_LINE_HEIGHT/2); // +40 for "(*) " + space
             break;
         }
@@ -420,7 +512,7 @@ void renderMenuScreen(const String& title, std::vector<MenuItem>& items, int cur
 }
 
 // ========================================
-// v2.1.3: Unified Setup Screen with Standby Behavior Settings
+// v2.2: Unicode Range Customization
 // ========================================
 
 // Forward declarations
@@ -435,6 +527,9 @@ void buildUnifiedMenu(std::vector<MenuItem>& items, PaginationState& pagination,
 
     // 1. Confirm button (always first)
     items.push_back({MENU_CONFIRM, "Confirm", false, 0, -1});
+
+    // v2.2: Customize Unicode ranges (navigable button)
+    items.push_back({MENU_LABEL, "Customize Unicode ranges", false, 0, -5}); // fontIndex=-5 for Unicode ranges page
 
     // 2. Separator (30px)
     items.push_back({MENU_SEPARATOR, "", false, 0, -1});
@@ -538,9 +633,9 @@ void renderUnifiedSetupScreen(std::vector<MenuItem>& items, int cursorIndex, boo
     canvas.setTextDatum(TC_DATUM);
     canvas.drawString("PaperSpecimen", 270, 30);
 
-    // Fixed footer: "v2.1.3" at Y=930
+    // Fixed footer: "v2.2" at Y=930
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString("v2.1.3", 270, 930);
+    canvas.drawString("v2.2", 270, 930);
 
     // Calculate available space for menu items
     const int headerBottom = 30 + 24; // Y=30 + text height
@@ -579,6 +674,152 @@ void renderUnifiedSetupScreen(std::vector<MenuItem>& items, int cursorIndex, boo
             menuHasPartial = false;
         }
     }
+}
+
+// v2.2: Unicode Ranges Configuration Screen
+void setupUnicodeRanges() {
+    Serial.println("\n=== Unicode Ranges Configuration ===");
+
+    // Local copy of range flags
+    std::vector<bool> rangeEnabledLocal = config.rangeEnabled;
+
+    // Ensure rangeEnabledLocal has correct size
+    if (rangeEnabledLocal.size() != numGlyphRanges) {
+        rangeEnabledLocal.clear();
+        for (int i = 0; i < numGlyphRanges; i++) {
+            rangeEnabledLocal.push_back(i < 6); // First 6 enabled by default
+        }
+    }
+
+    int cursorIndex = 0;
+    int currentPage = 0;
+    const int rangesPerPage = 14; // 14 ranges per page
+    const int totalPages = (numGlyphRanges + rangesPerPage - 1) / rangesPerPage;
+
+    // Build initial menu
+    std::vector<MenuItem> items;
+
+    auto rebuildMenu = [&]() {
+        items.clear();
+        items.push_back({MENU_CONFIRM, "Confirm", false, 0, -1});
+
+        // Select/Deselect all (clickable label with fontIndex=-2, like in main config)
+        bool allSelected = true;
+        for (bool enabled : rangeEnabledLocal) {
+            if (!enabled) {
+                allSelected = false;
+                break;
+            }
+        }
+        items.push_back({MENU_LABEL, "Select/Deselect all", allSelected, 0, -2});
+
+        items.push_back({MENU_SEPARATOR, "", false, 0, -1});
+
+        int startRange = currentPage * rangesPerPage;
+        int endRange = min(startRange + rangesPerPage, numGlyphRanges);
+
+        if (currentPage > 0) {
+            items.push_back({MENU_PAGE_NAV, "<<<", false, -1, -1});
+        }
+
+        for (int i = startRange; i < endRange; i++) {
+            items.push_back({MENU_CHECKBOX, glyphRanges[i].name, rangeEnabledLocal[i], 0, i});
+        }
+
+        if (currentPage < totalPages - 1) {
+            items.push_back({MENU_PAGE_NAV, ">>>", false, 1, -1});
+        }
+    };
+
+    rebuildMenu();
+
+    // Initial render with full refresh
+    renderUnifiedSetupScreen(items, cursorIndex, true);
+
+    bool exitRangesScreen = false;
+
+    while (!exitRangesScreen) {
+        // Wait for button press
+        M5.update();
+        delay(50);
+
+        if (M5.BtnL.wasPressed()) {
+            // Move cursor up
+            do {
+                cursorIndex--;
+                if (cursorIndex < 0) cursorIndex = items.size() - 1;
+                // Skip separators and non-clickable labels (except fontIndex=-2 for Select/Deselect all)
+            } while (items[cursorIndex].type == MENU_SEPARATOR ||
+                     (items[cursorIndex].type == MENU_LABEL && items[cursorIndex].fontIndex != -2));
+            renderUnifiedSetupScreen(items, cursorIndex, false);
+        }
+
+        if (M5.BtnR.wasPressed()) {
+            // Move cursor down
+            do {
+                cursorIndex++;
+                if (cursorIndex >= items.size()) cursorIndex = 0;
+                // Skip separators and non-clickable labels (except fontIndex=-2 for Select/Deselect all)
+            } while (items[cursorIndex].type == MENU_SEPARATOR ||
+                     (items[cursorIndex].type == MENU_LABEL && items[cursorIndex].fontIndex != -2));
+            renderUnifiedSetupScreen(items, cursorIndex, false);
+        }
+
+        if (M5.BtnP.wasPressed()) {
+            MenuItem& currentItem = items[cursorIndex];
+
+            if (currentItem.type == MENU_CONFIRM) {
+                // Save and return to main config
+                config.rangeEnabled = rangeEnabledLocal;
+                Serial.println("Unicode ranges configured");
+                exitRangesScreen = true;
+
+            } else if (currentItem.type == MENU_LABEL && currentItem.fontIndex == -2) {
+                // "Select/Deselect all" - toggle all ranges
+                bool newState = !currentItem.selected;
+                for (size_t i = 0; i < rangeEnabledLocal.size(); i++) {
+                    rangeEnabledLocal[i] = newState;
+                }
+                Serial.printf("Select/Deselect all ranges: %s\n", newState ? "all selected" : "all deselected");
+                rebuildMenu();
+                renderUnifiedSetupScreen(items, cursorIndex, false);
+
+            } else if (currentItem.type == MENU_CHECKBOX) {
+                // Toggle range
+                int rangeIndex = currentItem.fontIndex;
+                rangeEnabledLocal[rangeIndex] = !rangeEnabledLocal[rangeIndex];
+                Serial.printf("Toggled range %d (%s): %s\n",
+                             rangeIndex, glyphRanges[rangeIndex].name,
+                             rangeEnabledLocal[rangeIndex] ? "enabled" : "disabled");
+                rebuildMenu();
+                renderUnifiedSetupScreen(items, cursorIndex, false);
+
+            } else if (currentItem.type == MENU_PAGE_NAV) {
+                // Page navigation
+                if (currentItem.value == -1) {
+                    // Previous page
+                    currentPage--;
+                } else {
+                    // Next page
+                    currentPage++;
+                }
+                rebuildMenu();
+
+                // Position cursor on first range checkbox
+                // Structure: Confirm(0), Select/Deselect(1), Sep(2), [<<<(3)], ranges...
+                cursorIndex = 3; // Start at separator + 1
+                if (currentPage > 0) {
+                    cursorIndex = 4; // Skip "<<<" navigation item
+                }
+
+                renderUnifiedSetupScreen(items, cursorIndex, false);
+            }
+
+            delay(200);
+        }
+    }
+
+    Serial.println("=== Unicode Ranges Configuration Complete ===\n");
 }
 
 // Unified setup screen - combines interval and font selection
@@ -645,9 +886,9 @@ void setupScreenUnified() {
                 if (cursorIndex < 0) {
                     cursorIndex = items.size() - 1; // Wrap to last item
                 }
-                // Skip separators and non-clickable labels (but not "Select/Deselect all" which has fontIndex=-2)
+                // Skip separators and non-clickable labels (but not "Select/Deselect all" fontIndex=-2 or "Customize Unicode ranges" fontIndex=-5)
             } while (items[cursorIndex].type == MENU_SEPARATOR ||
-                     (items[cursorIndex].type == MENU_LABEL && items[cursorIndex].fontIndex != -2));
+                     (items[cursorIndex].type == MENU_LABEL && items[cursorIndex].fontIndex != -2 && items[cursorIndex].fontIndex != -5));
             renderUnifiedSetupScreen(items, cursorIndex);
             delay(200);
         }
@@ -661,9 +902,9 @@ void setupScreenUnified() {
                 if (cursorIndex >= items.size()) {
                     cursorIndex = 0; // Wrap to Confirm
                 }
-                // Skip separators and non-clickable labels (but not "Select/Deselect all" which has fontIndex=-2)
+                // Skip separators and non-clickable labels (but not "Select/Deselect all" fontIndex=-2 or "Customize Unicode ranges" fontIndex=-5)
             } while (items[cursorIndex].type == MENU_SEPARATOR ||
-                     (items[cursorIndex].type == MENU_LABEL && items[cursorIndex].fontIndex != -2));
+                     (items[cursorIndex].type == MENU_LABEL && items[cursorIndex].fontIndex != -2 && items[cursorIndex].fontIndex != -5));
             renderUnifiedSetupScreen(items, cursorIndex);
             delay(200);
         }
@@ -708,6 +949,15 @@ void setupScreenUnified() {
                 buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
                 Serial.printf("Selected interval: %d min\n", selectedInterval);
                 renderUnifiedSetupScreen(items, cursorIndex);
+
+            } else if (currentItem.type == MENU_LABEL && currentItem.fontIndex == -5) {
+                // v2.2: "Customize Unicode ranges" - open Unicode ranges configuration
+                Serial.println("Opening Unicode ranges configuration...");
+                setupUnicodeRanges();
+                // Return to main config, rebuild menu
+                buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
+                renderUnifiedSetupScreen(items, cursorIndex, true);
+                lastActivityTime = millis(); // Reset timeout
 
             } else if (currentItem.type == MENU_LABEL && currentItem.fontIndex == -2) {
                 // "Select/Deselect all" - special clickable label without markers
@@ -1069,7 +1319,8 @@ RTC_DATA_ATTR struct {
     int currentFontIndex;
     uint32_t currentGlyphCodepoint;
     ViewMode viewMode;  // STEP 5: Persist view mode across sleep
-} rtcState = {false, 0, 0x0041, BITMAP};  // Default: BITMAP mode
+    uint64_t totalMillis; // Total uptime in milliseconds since last reset (accumulated across sleep cycles)
+} rtcState = {false, 0, 0x0041, BITMAP, 0};  // Default: BITMAP mode, 0 uptime
 
 // Font management
 std::vector<String> fontPaths;
@@ -1082,28 +1333,6 @@ uint32_t currentGlyphCodepoint = 0x0041; // Start with 'A'
 
 // STEP 5: Current view mode
 ViewMode currentViewMode = BITMAP;  // Start in bitmap mode (default)
-
-// Unicode ranges for random glyph selection
-struct UnicodeRange {
-    uint32_t start;
-    uint32_t end;
-    const char* name;
-};
-
-// Common Unicode ranges for typography specimens
-// Weighted to favor ranges most likely to exist in fonts
-const UnicodeRange glyphRanges[] = {
-    {0x0041, 0x005A, "Latin Uppercase"},       // A-Z (highly likely)
-    {0x0061, 0x007A, "Latin Lowercase"},       // a-z (highly likely)
-    {0x0030, 0x0039, "Digits"},                // 0-9 (highly likely)
-    {0x0021, 0x002F, "Basic Punctuation 1"},   // !"#$%&'()*+,-./
-    {0x003A, 0x0040, "Basic Punctuation 2"},   // :;<=>?@
-    {0x005B, 0x0060, "Basic Punctuation 3"},   // [\]^_`
-    {0x007B, 0x007E, "Basic Punctuation 4"},   // {|}~
-    {0x00A1, 0x00BF, "Latin-1 Punctuation"},   // ¡-¿
-    {0x00C0, 0x00FF, "Latin-1 Letters"},       // À-ÿ accented
-};
-const int numGlyphRanges = sizeof(glyphRanges) / sizeof(glyphRanges[0]);
 
 // Scan microSD for font files
 void scanFonts() {
@@ -1381,6 +1610,54 @@ int outlineCubicTo(const FT_Vector* control1, const FT_Vector* control2, const F
         g_num_points++;
     }
     return 0;
+}
+
+// ========================================
+// Helper: Find a valid glyph in the current font
+// ========================================
+
+// Try to find a glyph that exists in the font, starting from the preferred codepoint
+// Returns the found codepoint, or 0 if no valid glyph found
+uint32_t findValidGlyph(uint32_t preferredCodepoint) {
+    FT_Face face = getFontFaceFromCanvas();
+    if (!face) {
+        return 0;
+    }
+
+    // First try the preferred codepoint
+    FT_UInt glyph_index = FT_Get_Char_Index(face, preferredCodepoint);
+    if (glyph_index != 0) {
+        return preferredCodepoint; // Found!
+    }
+
+    Serial.printf("Glyph U+%04X not in font, searching for alternative...\n", preferredCodepoint);
+
+    // v2.2: Try to find ANY valid glyph in enabled Unicode ranges
+    for (int i = 0; i < numGlyphRanges; i++) {
+        // Skip disabled ranges
+        if (i >= config.rangeEnabled.size() || !config.rangeEnabled[i]) {
+            continue;
+        }
+
+        for (uint32_t codepoint = glyphRanges[i].start; codepoint <= glyphRanges[i].end; codepoint++) {
+            glyph_index = FT_Get_Char_Index(face, codepoint);
+            if (glyph_index != 0) {
+                Serial.printf("Found alternative glyph: U+%04X from %s\n", codepoint, glyphRanges[i].name);
+                return codepoint;
+            }
+        }
+    }
+
+    // If still nothing, try the first glyph in the font (usually space or .notdef)
+    FT_UInt agindex;
+    FT_ULong charcode = FT_Get_First_Char(face, &agindex);
+    if (agindex != 0 && charcode != 0) {
+        Serial.printf("Found first available glyph in font: U+%04lX (index %u)\n", charcode, agindex);
+        return (uint32_t)charcode;
+    }
+
+    Serial.println("ERROR: No valid glyphs found in font!");
+    return 0; // No glyphs found at all
 }
 
 // ========================================
@@ -1861,16 +2138,45 @@ uint32_t getRandomGlyphCodepoint() {
     // Re-seed with more entropy each time for better randomness
     randomSeed(analogRead(0) ^ millis() ^ micros());
 
-    // Pick random range
-    int rangeIndex = random(0, numGlyphRanges);
+    // v2.2: Build list of enabled ranges
+    std::vector<int> enabledRanges;
+    for (int i = 0; i < numGlyphRanges; i++) {
+        if (i < config.rangeEnabled.size() && config.rangeEnabled[i]) {
+            enabledRanges.push_back(i);
+        }
+    }
+
+    // If no ranges enabled, fallback to first 6 (safety)
+    if (enabledRanges.empty()) {
+        Serial.println("WARNING: No ranges enabled, using defaults");
+        for (int i = 0; i < 6 && i < numGlyphRanges; i++) {
+            enabledRanges.push_back(i);
+        }
+    }
+
+    // Pick random enabled range
+    int randomIndex = random(0, enabledRanges.size());
+    int rangeIndex = enabledRanges[randomIndex];
     const UnicodeRange& range = glyphRanges[rangeIndex];
 
     // Pick random codepoint in range
-    uint32_t codepoint = random(range.start, range.end + 1);
+    uint32_t preferredCodepoint = random(range.start, range.end + 1);
 
-    Serial.printf("Random glyph: U+%04X from %s (range %d/%d)\n",
-                  codepoint, range.name, rangeIndex + 1, numGlyphRanges);
-    return codepoint;
+    Serial.printf("Random glyph: U+%04X from %s (range %d/%d enabled)\n",
+                  preferredCodepoint, range.name, rangeIndex + 1, enabledRanges.size());
+
+    // Verify the glyph exists in the current font, or find an alternative
+    uint32_t validCodepoint = findValidGlyph(preferredCodepoint);
+    if (validCodepoint == 0) {
+        Serial.println("ERROR: No valid glyphs found in font, skipping to next font");
+        return 0; // Signal to skip this font
+    }
+
+    if (validCodepoint != preferredCodepoint) {
+        Serial.printf("Using alternative glyph: U+%04X\n", validCodepoint);
+    }
+
+    return validCodepoint;
 }
 
 // Convert Unicode codepoint to UTF-8 string
@@ -2061,31 +2367,91 @@ void renderGlyph() {
     }
 }
 
-// Change to next font
+// Change to next font (skip fonts that don't have the current glyph)
 void nextFont() {
     if (fontPaths.empty()) return;
 
-    currentFontIndex = (currentFontIndex + 1) % fontPaths.size();
-    Serial.printf("Switching to font %d/%d\n", currentFontIndex + 1, fontPaths.size());
+    int startIndex = currentFontIndex;
+    int attempts = 0;
 
-    if (loadCurrentFont()) {
-        renderGlyph();
-    }
+    // Try to find a font that has the current glyph
+    do {
+        currentFontIndex = (currentFontIndex + 1) % fontPaths.size();
+        attempts++;
+
+        Serial.printf("Trying font %d/%d\n", currentFontIndex + 1, fontPaths.size());
+
+        if (loadCurrentFont()) {
+            // Check if this font has the current glyph
+            FT_Face face = getFontFaceFromCanvas();
+            if (face) {
+                FT_UInt glyph_index = FT_Get_Char_Index(face, currentGlyphCodepoint);
+                if (glyph_index != 0) {
+                    // Found a font with this glyph!
+                    Serial.printf("Font %d has glyph U+%04X\n", currentFontIndex + 1, currentGlyphCodepoint);
+                    renderGlyph();
+                    return;
+                } else {
+                    Serial.printf("Font %d doesn't have glyph U+%04X, skipping...\n",
+                                  currentFontIndex + 1, currentGlyphCodepoint);
+                }
+            }
+        }
+
+        // Check if we've tried all fonts
+        if (attempts >= fontPaths.size()) {
+            Serial.println("No font has this glyph! Returning to original font.");
+            currentFontIndex = startIndex;
+            loadCurrentFont();
+            renderGlyph();
+            return;
+        }
+    } while (true);
 }
 
-// Change to previous font
+// Change to previous font (skip fonts that don't have the current glyph)
 void previousFont() {
     if (fontPaths.empty()) return;
 
-    currentFontIndex--;
-    if (currentFontIndex < 0) {
-        currentFontIndex = fontPaths.size() - 1;
-    }
-    Serial.printf("Switching to font %d/%d\n", currentFontIndex + 1, fontPaths.size());
+    int startIndex = currentFontIndex;
+    int attempts = 0;
 
-    if (loadCurrentFont()) {
-        renderGlyph();
-    }
+    // Try to find a font that has the current glyph
+    do {
+        currentFontIndex--;
+        if (currentFontIndex < 0) {
+            currentFontIndex = fontPaths.size() - 1;
+        }
+        attempts++;
+
+        Serial.printf("Trying font %d/%d\n", currentFontIndex + 1, fontPaths.size());
+
+        if (loadCurrentFont()) {
+            // Check if this font has the current glyph
+            FT_Face face = getFontFaceFromCanvas();
+            if (face) {
+                FT_UInt glyph_index = FT_Get_Char_Index(face, currentGlyphCodepoint);
+                if (glyph_index != 0) {
+                    // Found a font with this glyph!
+                    Serial.printf("Font %d has glyph U+%04X\n", currentFontIndex + 1, currentGlyphCodepoint);
+                    renderGlyph();
+                    return;
+                } else {
+                    Serial.printf("Font %d doesn't have glyph U+%04X, skipping...\n",
+                                  currentFontIndex + 1, currentGlyphCodepoint);
+                }
+            }
+        }
+
+        // Check if we've tried all fonts
+        if (attempts >= fontPaths.size()) {
+            Serial.println("No font has this glyph! Returning to original font.");
+            currentFontIndex = startIndex;
+            loadCurrentFont();
+            renderGlyph();
+            return;
+        }
+    } while (true);
 }
 
 // Generate and display new random glyph
@@ -2093,6 +2459,14 @@ void randomGlyph() {
     if (!fontLoaded) return;
 
     currentGlyphCodepoint = getRandomGlyphCodepoint();
+
+    // If no valid glyph found in current font, try next font
+    if (currentGlyphCodepoint == 0) {
+        Serial.println("No valid glyphs in current font, switching to next font");
+        nextFont(); // This will automatically skip fonts without glyphs
+        return;
+    }
+
     renderGlyph();
 }
 
@@ -2113,8 +2487,14 @@ void randomFont() {
 
 // Check battery level and return percentage (0-100)
 float getBatteryPercentage() {
-    uint32_t voltage = M5.getBatteryVoltage();
-    Serial.printf("Battery voltage: %dmV\n", voltage);
+    // Take average of 5 readings to reduce ADC noise
+    uint32_t voltageSum = 0;
+    for (int i = 0; i < 5; i++) {
+        voltageSum += M5.getBatteryVoltage();
+        delay(10); // Small delay between readings
+    }
+    uint32_t voltage = voltageSum / 5;
+    Serial.printf("Battery voltage: %dmV (averaged)\n", voltage);
 
     // LiPo voltage range: 4200mV (100%) to 3300mV (0%)
     // 5% threshold = ~3345mV
@@ -2123,6 +2503,42 @@ float getBatteryPercentage() {
 
     float percentage = ((float)(voltage - 3300) / (4200 - 3300)) * 100.0;
     return percentage;
+}
+
+// Log battery data to .battery file on SD card
+void logBatteryData(uint32_t voltage, float percentage, bool isReset) {
+    File file = SD.open("/.battery", FILE_APPEND);
+    if (!file) {
+        Serial.println("WARNING: Could not open .battery file for logging");
+        return;
+    }
+
+    if (isReset) {
+        // Write reset separator with timestamp (uptime resets to 0)
+        file.println();
+        file.println("=== RESET ===");
+        file.println();
+        Serial.println("Battery log: RESET marker written");
+    } else {
+        // Calculate total uptime: accumulated time in RTC + current session time
+        uint64_t totalMillis = rtcState.totalMillis + millis();
+        uint32_t totalSeconds = totalMillis / 1000; // Convert to seconds
+        uint32_t days = totalSeconds / (24 * 60 * 60);
+        uint32_t hours = (totalSeconds % (24 * 60 * 60)) / (60 * 60);
+        uint32_t minutes = (totalSeconds % (60 * 60)) / 60;
+        uint32_t seconds = totalSeconds % 60;
+
+        // Format: "DDd HHh MMm SSs | 4236mV | 100.0% | BITMAP"
+        char line[80];
+        snprintf(line, sizeof(line), "%02lud %02luh %02lum %02lus | %4lumV | %5.1f%% | %s",
+                 days, hours, minutes, seconds, voltage, percentage,
+                 currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+
+        file.println(line);
+        Serial.printf("Battery log: %s\n", line);
+    }
+
+    file.close();
 }
 
 // Display low battery icon and shutdown
@@ -2178,6 +2594,20 @@ void lowBatteryShutdown() {
 // Save state and enter deep sleep
 void enterDeepSleep() {
     Serial.println("\n>>> Preparing for deep sleep...");
+
+    // Accumulate current session time to total uptime
+    uint32_t currentMillis = millis();
+    Serial.printf("DEBUG: Before accumulation: rtcState.totalMillis=%llu, millis()=%lu\n",
+                  rtcState.totalMillis, currentMillis);
+    rtcState.totalMillis += currentMillis;
+    Serial.printf("DEBUG: After accumulation: rtcState.totalMillis=%llu\n", rtcState.totalMillis);
+
+    uint32_t totalMinutes = rtcState.totalMillis / 60000;
+    Serial.printf("Accumulated uptime: %lu minutes (%lud %02luh %02lum)\n",
+                  totalMinutes,
+                  totalMinutes / (24 * 60),
+                  (totalMinutes % (24 * 60)) / 60,
+                  totalMinutes % 60);
 
     // Save current state to RTC memory
     rtcState.isValid = true;
@@ -2301,9 +2731,9 @@ void shutdownWithScreen() {
     canvas.drawString("PaperSpecimen", 270, 30);
     Serial.println("Top label drawn");
 
-    // Bottom label: "v2.1.3"
+    // Bottom label: "v2.2"
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString("v2.1.3", 270, 930);
+    canvas.drawString("v2.2", 270, 930);
     Serial.println("Bottom label drawn");
 
     // Full refresh to clear any ghosting
@@ -2382,12 +2812,22 @@ void setup() {
         // Wake display controller
         M5.EPD.Active();
         Serial.println("Display controller reactivated");
+
+        // DEBUG: Print RTC state immediately after wake
+        Serial.printf("DEBUG: rtcState.totalMillis = %llu (isValid=%d)\n",
+                      rtcState.totalMillis, rtcState.isValid);
+
+        // If this is a timer wake, we need to load config first to know the sleep duration
+        // For now, we'll add the sleep time later after config is loaded
     }
 
-    // Check battery level on wake from sleep
+    // Check battery level on wake from sleep (logging happens later after uptime calculation)
+    float batteryLevel = 0.0;
+    uint32_t batteryVoltage = 0;
     if (isWakeFromSleep) {
         M5.BatteryADCBegin(); // Initialize battery ADC
-        float batteryLevel = getBatteryPercentage();
+        batteryVoltage = M5.getBatteryVoltage();
+        batteryLevel = getBatteryPercentage();
         Serial.printf("Battery level: %.1f%%\n", batteryLevel);
 
         // If battery is below 5%, show low battery screen and shutdown
@@ -2428,12 +2868,12 @@ void setup() {
         // QR code in center
         drawQRCode(270, 480, 6, 6); // 6×6 px per module
 
-        // Bottom label: "v2.1.3" (same position as unicode)
+        // Bottom label: "v2.2" (same position as unicode)
         canvas.setTextDatum(BC_DATUM);
-        canvas.drawString("v2.1.3", 270, 930);
+        canvas.drawString("v2.2", 270, 930);
 
         canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-        Serial.println("Boot splash v2.1.3 with QR code displayed");
+        Serial.println("Boot splash v2.2 with QR code displayed");
         delay(5000); // Show boot splash for 5 seconds
     } else {
         Serial.println("Skipping boot screen (wake from sleep)");
@@ -2477,6 +2917,11 @@ void setup() {
     }
     Serial.println("microSD initialized successfully");
 
+    // Log reset marker to battery log (only on cold boot, not on wake)
+    if (!isWakeFromSleep) {
+        logBatteryData(0, 0.0, true); // isReset=true
+    }
+
     // Check if /fonts directory exists
     if (!SD.exists("/fonts")) {
         Serial.println("WARNING: /fonts directory not found");
@@ -2502,7 +2947,7 @@ void setup() {
         while(1) delay(1000); // halt
     }
 
-    // v2.1.3: Config handling
+    // v2.2: Config handling
     if (!isWakeFromSleep) {
         // COLD BOOT: Always run unified setup screen
         Serial.println("\n=== Cold Boot: Running Setup ===");
@@ -2570,6 +3015,27 @@ void setup() {
         currentViewMode = rtcState.viewMode;
         Serial.printf("Restored view mode: %s\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
 
+        // Add sleep duration to total uptime (only for timer wakes, not button wakes)
+        if (isAutoWake) {
+            uint64_t sleepMillis = (uint64_t)config.wakeIntervalMinutes * 60 * 1000;
+            Serial.printf("DEBUG: Adding sleep time to uptime: %llu ms (%d minutes)\n",
+                          sleepMillis, config.wakeIntervalMinutes);
+            rtcState.totalMillis += sleepMillis;
+            Serial.printf("DEBUG: Updated rtcState.totalMillis = %llu\n", rtcState.totalMillis);
+        }
+
+        // Calculate and display current uptime (accumulated + current session)
+        uint64_t currentTotalMillis = rtcState.totalMillis + millis();
+        uint32_t totalMinutes = currentTotalMillis / 60000;
+        Serial.printf("Uptime: %lu minutes (%lud %02luh %02lum)\n",
+                      totalMinutes,
+                      totalMinutes / (24 * 60),
+                      (totalMinutes % (24 * 60)) / 60,
+                      totalMinutes % 60);
+
+        // Log battery data to .battery file (now that uptime has been properly calculated)
+        logBatteryData(batteryVoltage, batteryLevel, false);
+
         if (isAutoWake) {
             // Auto-wake from RTC alarm: randomize based on config settings
             Serial.println("\n=== Auto-wake: Applying randomization settings ===");
@@ -2603,7 +3069,23 @@ void setup() {
             // Load font and generate random glyph
             if (loadCurrentFont()) {
                 currentGlyphCodepoint = getRandomGlyphCodepoint();
-                renderGlyph();
+
+                // If no valid glyph found, try other fonts
+                int attempts = 0;
+                while (currentGlyphCodepoint == 0 && attempts < fontPaths.size()) {
+                    Serial.println("No valid glyphs in this font, trying next...");
+                    currentFontIndex = (currentFontIndex + 1) % fontPaths.size();
+                    if (loadCurrentFont()) {
+                        currentGlyphCodepoint = getRandomGlyphCodepoint();
+                    }
+                    attempts++;
+                }
+
+                if (currentGlyphCodepoint != 0) {
+                    renderGlyph();
+                } else {
+                    Serial.println("WARNING: No fonts with valid glyphs, skipping render");
+                }
             }
         } else {
             // Button wake: restore previous state
@@ -2643,6 +3125,31 @@ void setup() {
 
         if (loadCurrentFont()) {
             currentGlyphCodepoint = getRandomGlyphCodepoint();
+
+            // If no valid glyph found in first font, try fonts until we find one with glyphs
+            int attempts = 0;
+            while (currentGlyphCodepoint == 0 && attempts < fontPaths.size()) {
+                Serial.println("No valid glyphs in this font, trying next...");
+                currentFontIndex = (currentFontIndex + 1) % fontPaths.size();
+                if (loadCurrentFont()) {
+                    currentGlyphCodepoint = getRandomGlyphCodepoint();
+                }
+                attempts++;
+            }
+
+            if (currentGlyphCodepoint == 0) {
+                Serial.println("CRITICAL ERROR: No fonts with valid glyphs found!");
+                // Show error on screen
+                canvas.fillCanvas(15);
+                canvas.setTextColor(0);
+                canvas.setTextDatum(CC_DATUM);
+                canvas.setTextSize(2);
+                canvas.drawString("NO COMPATIBLE FONTS", 270, 400);
+                canvas.drawString("Check font files", 270, 450);
+                canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+                while(1) delay(1000); // Halt
+            }
+
             renderGlyph();
 
             // Full refresh after first render to clear boot screen ghosting
