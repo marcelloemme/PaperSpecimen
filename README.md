@@ -4,7 +4,7 @@
 
 Visualize TrueType glyphs in high-quality anti-aliased bitmap or detailed vector outline mode with Bézier construction lines. Configure fonts, refresh intervals, and standby behavior with an intuitive UI. Enjoy weeks of battery life with intelligent deep sleep.
 
-**Current version: v2.2**
+**Current version: v2.2.3**
 
 ## Features
 
@@ -415,7 +415,20 @@ RTC_DATA_ATTR struct {
 
 ## Version History
 
-### v2.2 (Current)
+### v2.2.3 (Current)
+- **Performance optimizations**: Improved menu responsiveness
+  - Pre-computed font name truncation (calculated once, not on every cursor move)
+  - Smart menu state updates (no rebuild on checkbox/radio toggle)
+  - Reduced log spam for cleaner serial output
+- **Normal mode optimizations**: Maximum battery efficiency
+  - Serial disabled immediately after mode detection
+  - Uptime tracking only in debug mode (no unnecessary calculations)
+  - SD writes eliminated in normal mode (battery logging only in debug)
+- **Debug mode enhancements**: Faster testing intervals
+  - Debug mode intervals: 1/2/5 minutes (vs 5/10/15 in normal mode)
+  - Full battery logging and serial output for development
+
+### v2.2
 - **Unicode ranges configuration**: User-selectable character sets
   - 28 Unicode ranges available (Latin, Greek, Cyrillic, Arabic, CJK, symbols, etc.)
   - Second configuration page with multi-page navigation (14 ranges per page)

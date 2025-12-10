@@ -113,11 +113,48 @@ AppConfig config;
 const char* CONFIG_FILE = "/paperspecimen.cfg";
 
 // ========================================
-// v2.1: Config File I/O Functions
+// Font File Cache (for battery optimization)
+// ========================================
+#define MAX_FONT_CACHE_SIZE (1500000)  // 1.5MB total cache
+
+struct FontCacheEntry {
+    int fontIndex;
+    uint8_t* data;
+    size_t size;
+};
+
+std::vector<FontCacheEntry> fontCache;
+size_t totalCacheSize = 0;
+
+// ========================================
+// View Mode (for display glyph rendering)
+// ========================================
+enum ViewMode {
+    BITMAP,    // Bitmap rendering (filled glyph)
+    OUTLINE    // Vector outline with control points and construction lines
+};
+
+// RTC memory structure to persist state across deep sleep
+RTC_DATA_ATTR struct {
+    bool isValid;
+    int currentFontIndex;
+    uint32_t currentGlyphCodepoint;
+    ViewMode viewMode;  // STEP 5: Persist view mode across sleep
+    uint64_t totalMillis; // Total uptime in milliseconds since last reset (accumulated across sleep cycles)
+    bool debugMode;  // Debug mode: enables Serial output and battery logging (persists across wake, resets on cold boot)
+} rtcState = {false, 0, 0x0041, BITMAP, 0, false};  // Default: BITMAP mode, 0 uptime, normal mode (debugMode=false)
+
+// ========================================
+// v2.2.1: Config File I/O Functions (Flash + SD)
 // ========================================
 
-// Load config from SD card
+// Forward declaration
+bool loadConfigFromFile(File& file);
+
+// Load config from SD
 bool loadConfig() {
+    Serial.println("\n=== Loading Config from SD ===");
+
     if (!SD.exists(CONFIG_FILE)) {
         Serial.println("Config file not found - will run first-time setup");
         return false;
@@ -129,17 +166,31 @@ bool loadConfig() {
         return false;
     }
 
-    Serial.println("\n=== Loading Config ===");
+    bool success = loadConfigFromFile(file);
+    file.close();
+
+    if (success) {
+        Serial.println("=== Config Loaded from SD Successfully ===\n");
+    }
+
+    return success;
+}
+
+// Helper function to load config from any File object (Flash or SD)
+bool loadConfigFromFile(File& file) {
 
     // Read wake interval (first line)
     String line = file.readStringUntil('\n');
     line.trim();
     config.wakeIntervalMinutes = line.toInt();
 
-    if (config.wakeIntervalMinutes != 5 &&
+    // v2.2.1: Allow 1/2/5/10/15 minutes (1/2 for debug mode)
+    if (config.wakeIntervalMinutes != 1 &&
+        config.wakeIntervalMinutes != 2 &&
+        config.wakeIntervalMinutes != 5 &&
         config.wakeIntervalMinutes != 10 &&
         config.wakeIntervalMinutes != 15) {
-        Serial.printf("ERROR: Invalid wake interval %d, expected 5/10/15\n", config.wakeIntervalMinutes);
+        Serial.printf("ERROR: Invalid wake interval %d, expected 1/2/5/10/15\n", config.wakeIntervalMinutes);
         file.close();
         return false;
     }
@@ -198,10 +249,8 @@ bool loadConfig() {
         }
     }
 
-    file.close();
     Serial.printf("Loaded %d font enable flags, %d range enable flags\n",
                   config.fontEnabled.size(), config.rangeEnabled.size());
-    Serial.println("=== Config Loaded Successfully ===\n");
     return true;
 }
 
@@ -294,6 +343,7 @@ enum MenuItemType {
 struct MenuItem {
     MenuItemType type;
     String label;
+    String displayLabel;  // Pre-computed truncated label (empty = use label)
     bool selected;     // For radio/checkbox
     int value;         // For radio (5, 10, 15) or page navigation
     int fontIndex;     // For font checkboxes (-1 for non-font items)
@@ -410,14 +460,12 @@ void drawMenuItem(int y, MenuItem& item, bool isCursor) {
             break;
 
         case MENU_CHECKBOX: {
-            // Draw checkbox + label with space (shorten font names if needed)
+            // Draw checkbox + label with space
             drawCheckbox(checkboxX, y, item.selected);
             canvas.setTextDatum(CL_DATUM);
-            // Only shorten text for font names (fontIndex >= 0), not for settings checkboxes
-            String displayLabel = (item.fontIndex >= 0)
-                ? shortenTextIfNeeded(item.label, UI_MAX_TEXT_WIDTH)
-                : item.label;
-            canvas.drawString(displayLabel, checkboxX + 40, y + UI_LINE_HEIGHT/2); // +40 for "(*) " + space
+            // Use pre-computed displayLabel if available, otherwise use label
+            String textToDisplay = item.displayLabel.isEmpty() ? item.label : item.displayLabel;
+            canvas.drawString(textToDisplay, checkboxX + 40, y + UI_LINE_HEIGHT/2); // +40 for "(*) " + space
             break;
         }
 
@@ -526,34 +574,42 @@ void buildUnifiedMenu(std::vector<MenuItem>& items, PaginationState& pagination,
     items.clear();
 
     // 1. Confirm button (always first)
-    items.push_back({MENU_CONFIRM, "Confirm", false, 0, -1});
+    items.push_back({MENU_CONFIRM, "Confirm", "", false, 0, -1});
 
     // v2.2: Customize Unicode ranges (navigable button)
-    items.push_back({MENU_LABEL, "Customize Unicode ranges", false, 0, -5}); // fontIndex=-5 for Unicode ranges page
+    items.push_back({MENU_LABEL, "Customize Unicode ranges", "", false, 0, -5}); // fontIndex=-5 for Unicode ranges page
 
     // 2. Separator (30px)
-    items.push_back({MENU_SEPARATOR, "", false, 0, -1});
+    items.push_back({MENU_SEPARATOR, "", "", false, 0, -1});
 
     // 3. "Refresh timer" label (non-selectable)
-    items.push_back({MENU_LABEL, "Refresh timer", false, 0, -1});
+    items.push_back({MENU_LABEL, "Refresh timer", "", false, 0, -1});
 
-    // 4. Radio buttons for intervals (15min default)
-    items.push_back({MENU_RADIO, "15 min", selectedInterval == 15, 15, -1});
-    items.push_back({MENU_RADIO, "10 min", selectedInterval == 10, 10, -1});
-    items.push_back({MENU_RADIO, "5 min", selectedInterval == 5, 5, -1});
+    // 4. Radio buttons for intervals (different in debug mode)
+    if (rtcState.debugMode) {
+        // Debug mode: shorter intervals for testing (1, 2, 5 min)
+        items.push_back({MENU_RADIO, "5 min", "", selectedInterval == 5, 5, -1});
+        items.push_back({MENU_RADIO, "2 min", "", selectedInterval == 2, 2, -1});
+        items.push_back({MENU_RADIO, "1 min", "", selectedInterval == 1, 1, -1});
+    } else {
+        // Normal mode: standard intervals (5, 10, 15 min)
+        items.push_back({MENU_RADIO, "15 min", "", selectedInterval == 15, 15, -1});
+        items.push_back({MENU_RADIO, "10 min", "", selectedInterval == 10, 10, -1});
+        items.push_back({MENU_RADIO, "5 min", "", selectedInterval == 5, 5, -1});
+    }
 
     // 5. Separator (30px)
-    items.push_back({MENU_SEPARATOR, "", false, 0, -1});
+    items.push_back({MENU_SEPARATOR, "", "", false, 0, -1});
 
     // 6. "When in standby" label (non-selectable)
-    items.push_back({MENU_LABEL, "When in standby", false, 0, -1});
+    items.push_back({MENU_LABEL, "When in standby", "", false, 0, -1});
 
     // 7. Checkboxes for standby behavior
-    items.push_back({MENU_CHECKBOX, "Allow different font", allowDifferentFont, 0, -3}); // fontIndex=-3 for allowDifferentFont
-    items.push_back({MENU_CHECKBOX, "Allow different mode", allowDifferentMode, 0, -4}); // fontIndex=-4 for allowDifferentMode
+    items.push_back({MENU_CHECKBOX, "Allow different font", "", allowDifferentFont, 0, -3}); // fontIndex=-3 for allowDifferentFont
+    items.push_back({MENU_CHECKBOX, "Allow different mode", "", allowDifferentMode, 0, -4}); // fontIndex=-4 for allowDifferentMode
 
     // 8. Separator (30px)
-    items.push_back({MENU_SEPARATOR, "", false, 0, -1});
+    items.push_back({MENU_SEPARATOR, "", "", false, 0, -1});
 
     // 9. Font selection with pagination
     // Strategy: Always show "Select/Deselect all" on every page
@@ -600,22 +656,23 @@ void buildUnifiedMenu(std::vector<MenuItem>& items, PaginationState& pagination,
             break;
         }
     }
-    items.push_back({MENU_LABEL, "Select/Deselect all", allSelected, 0, -2}); // fontIndex=-2 special, clickable but no marker
+    items.push_back({MENU_LABEL, "Select/Deselect all", "", allSelected, 0, -2}); // fontIndex=-2 special, clickable but no marker
 
     // "..." prev page navigation (if not on first page) - AFTER Select/Deselect all
     if (pagination.currentPage > 0) {
-        items.push_back({MENU_PAGE_NAV, "...", false, -1, -1}); // value=-1 means prev
+        items.push_back({MENU_PAGE_NAV, "...", "", false, -1, -1}); // value=-1 means prev
     }
 
-    // Font checkboxes for current page
+    // Font checkboxes for current page - PRE-COMPUTE displayLabel to avoid recalculation on every cursor move
     for (int i = startFont; i < endFont; i++) {
         String fontName = getFontName(fontPaths[i]);
-        items.push_back({MENU_CHECKBOX, fontName, fontEnabled[i], 0, i});
+        String displayName = shortenTextIfNeeded(fontName, UI_MAX_TEXT_WIDTH);
+        items.push_back({MENU_CHECKBOX, fontName, displayName, fontEnabled[i], 0, i});
     }
 
     // "..." next page navigation (if more pages available)
     if (pagination.currentPage < pagination.totalPages - 1) {
-        items.push_back({MENU_PAGE_NAV, "...", false, 1, -1}); // value=1 means next
+        items.push_back({MENU_PAGE_NAV, "...", "", false, 1, -1}); // value=1 means next
     }
 }
 
@@ -633,9 +690,9 @@ void renderUnifiedSetupScreen(std::vector<MenuItem>& items, int cursorIndex, boo
     canvas.setTextDatum(TC_DATUM);
     canvas.drawString("PaperSpecimen", 270, 30);
 
-    // Fixed footer: "v2.2" at Y=930
+    // Fixed footer: "v2.2.3" (or "v2.2.3*" in debug mode) at Y=930
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString("v2.2", 270, 930);
+    canvas.drawString(rtcState.debugMode ? "v2.2.3*" : "v2.2.3", 270, 930);
 
     // Calculate available space for menu items
     const int headerBottom = 30 + 24; // Y=30 + text height
@@ -701,7 +758,7 @@ void setupUnicodeRanges() {
 
     auto rebuildMenu = [&]() {
         items.clear();
-        items.push_back({MENU_CONFIRM, "Confirm", false, 0, -1});
+        items.push_back({MENU_CONFIRM, "Confirm", "", false, 0, -1});
 
         // Select/Deselect all (clickable label with fontIndex=-2, like in main config)
         bool allSelected = true;
@@ -711,23 +768,23 @@ void setupUnicodeRanges() {
                 break;
             }
         }
-        items.push_back({MENU_LABEL, "Select/Deselect all", allSelected, 0, -2});
+        items.push_back({MENU_LABEL, "Select/Deselect all", "", allSelected, 0, -2});
 
-        items.push_back({MENU_SEPARATOR, "", false, 0, -1});
+        items.push_back({MENU_SEPARATOR, "", "", false, 0, -1});
 
         int startRange = currentPage * rangesPerPage;
         int endRange = min(startRange + rangesPerPage, numGlyphRanges);
 
         if (currentPage > 0) {
-            items.push_back({MENU_PAGE_NAV, "<<<", false, -1, -1});
+            items.push_back({MENU_PAGE_NAV, "<<<", "", false, -1, -1});
         }
 
         for (int i = startRange; i < endRange; i++) {
-            items.push_back({MENU_CHECKBOX, glyphRanges[i].name, rangeEnabledLocal[i], 0, i});
+            items.push_back({MENU_CHECKBOX, glyphRanges[i].name, "", rangeEnabledLocal[i], 0, i});
         }
 
         if (currentPage < totalPages - 1) {
-            items.push_back({MENU_PAGE_NAV, ">>>", false, 1, -1});
+            items.push_back({MENU_PAGE_NAV, ">>>", "", false, 1, -1});
         }
     };
 
@@ -775,23 +832,45 @@ void setupUnicodeRanges() {
                 exitRangesScreen = true;
 
             } else if (currentItem.type == MENU_LABEL && currentItem.fontIndex == -2) {
-                // "Select/Deselect all" - toggle all ranges
+                // "Select/Deselect all" - update all range checkboxes without rebuilding menu
                 bool newState = !currentItem.selected;
                 for (size_t i = 0; i < rangeEnabledLocal.size(); i++) {
                     rangeEnabledLocal[i] = newState;
                 }
+                // Update selected state of all range checkboxes AND the Select/Deselect all item itself
+                for (auto& item : items) {
+                    if (item.type == MENU_CHECKBOX) {
+                        item.selected = newState;
+                    } else if (item.type == MENU_LABEL && item.fontIndex == -2) {
+                        item.selected = newState;
+                    }
+                }
                 Serial.printf("Select/Deselect all ranges: %s\n", newState ? "all selected" : "all deselected");
-                rebuildMenu();
                 renderUnifiedSetupScreen(items, cursorIndex, false);
 
             } else if (currentItem.type == MENU_CHECKBOX) {
-                // Toggle range
+                // Toggle range - update without rebuilding menu
                 int rangeIndex = currentItem.fontIndex;
                 rangeEnabledLocal[rangeIndex] = !rangeEnabledLocal[rangeIndex];
+                currentItem.selected = rangeEnabledLocal[rangeIndex];
                 Serial.printf("Toggled range %d (%s): %s\n",
                              rangeIndex, glyphRanges[rangeIndex].name,
                              rangeEnabledLocal[rangeIndex] ? "enabled" : "disabled");
-                rebuildMenu();
+
+                // Update "Select/Deselect all" state based on whether all ranges are now selected
+                bool allSelected = true;
+                for (bool enabled : rangeEnabledLocal) {
+                    if (!enabled) {
+                        allSelected = false;
+                        break;
+                    }
+                }
+                for (auto& item : items) {
+                    if (item.type == MENU_LABEL && item.fontIndex == -2) {
+                        item.selected = allSelected;
+                        break;
+                    }
+                }
                 renderUnifiedSetupScreen(items, cursorIndex, false);
 
             } else if (currentItem.type == MENU_PAGE_NAV) {
@@ -827,7 +906,8 @@ void setupScreenUnified() {
     Serial.println("\n=== Unified Setup Screen ===");
 
     // Initialize state
-    int selectedInterval = 15; // Default: 15 minutes
+    // Default interval depends on debug mode
+    int selectedInterval = rtcState.debugMode ? 1 : 15; // Debug: 1 min, Normal: 15 min
     std::vector<bool> fontEnabledLocal = config.fontEnabled; // All fonts enabled by default
     bool allowDifferentFontLocal = config.allowDifferentFont;
     bool allowDifferentModeLocal = config.allowDifferentMode;
@@ -944,9 +1024,14 @@ void setupScreenUnified() {
                              config.allowDifferentMode ? "yes" : "no");
 
             } else if (currentItem.type == MENU_RADIO) {
-                // Radio button: deselect all intervals, select current
+                // Radio button: update selected state without rebuilding menu
                 selectedInterval = currentItem.value;
-                buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
+                // Update only the selected field of radio buttons
+                for (auto& item : items) {
+                    if (item.type == MENU_RADIO) {
+                        item.selected = (item.value == selectedInterval);
+                    }
+                }
                 Serial.printf("Selected interval: %d min\n", selectedInterval);
                 renderUnifiedSetupScreen(items, cursorIndex);
 
@@ -960,13 +1045,20 @@ void setupScreenUnified() {
                 lastActivityTime = millis(); // Reset timeout
 
             } else if (currentItem.type == MENU_LABEL && currentItem.fontIndex == -2) {
-                // "Select/Deselect all" - special clickable label without markers
+                // "Select/Deselect all" - update all font checkboxes without rebuilding menu
                 bool newState = !currentItem.selected;
                 for (size_t i = 0; i < fontEnabledLocal.size(); i++) {
                     fontEnabledLocal[i] = newState;
                 }
+                // Update selected state of all font checkboxes AND the Select/Deselect all item itself
+                for (auto& item : items) {
+                    if (item.type == MENU_CHECKBOX && item.fontIndex >= 0) {
+                        item.selected = newState;
+                    } else if (item.type == MENU_LABEL && item.fontIndex == -2) {
+                        item.selected = newState;
+                    }
+                }
                 Serial.printf("Select/Deselect all: %s\n", newState ? "all selected" : "all deselected");
-                buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
                 renderUnifiedSetupScreen(items, cursorIndex);
 
             } else if (currentItem.type == MENU_CHECKBOX) {
@@ -978,20 +1070,37 @@ void setupScreenUnified() {
                     }
                     Serial.printf("Select/Deselect all: %s\n", newState ? "all selected" : "all deselected");
                 } else if (currentItem.fontIndex == -3) {
-                    // "Allow different font" checkbox
+                    // "Allow different font" checkbox - toggle without rebuilding menu
                     allowDifferentFontLocal = !allowDifferentFontLocal;
+                    currentItem.selected = allowDifferentFontLocal;
                     Serial.printf("Toggled allow different font: %s\n", allowDifferentFontLocal ? "yes" : "no");
                 } else if (currentItem.fontIndex == -4) {
-                    // "Allow different mode" checkbox
+                    // "Allow different mode" checkbox - toggle without rebuilding menu
                     allowDifferentModeLocal = !allowDifferentModeLocal;
+                    currentItem.selected = allowDifferentModeLocal;
                     Serial.printf("Toggled allow different mode: %s\n", allowDifferentModeLocal ? "yes" : "no");
                 } else if (currentItem.fontIndex >= 0) {
-                    // Individual font checkbox
+                    // Individual font checkbox - toggle without rebuilding menu
                     fontEnabledLocal[currentItem.fontIndex] = !fontEnabledLocal[currentItem.fontIndex];
+                    currentItem.selected = fontEnabledLocal[currentItem.fontIndex];
                     Serial.printf("Toggled font %d: %s\n", currentItem.fontIndex,
                                  fontEnabledLocal[currentItem.fontIndex] ? "enabled" : "disabled");
+
+                    // Update "Select/Deselect all" state based on whether all fonts are now selected
+                    bool allSelected = true;
+                    for (bool enabled : fontEnabledLocal) {
+                        if (!enabled) {
+                            allSelected = false;
+                            break;
+                        }
+                    }
+                    for (auto& item : items) {
+                        if (item.type == MENU_LABEL && item.fontIndex == -2) {
+                            item.selected = allSelected;
+                            break;
+                        }
+                    }
                 }
-                buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
                 renderUnifiedSetupScreen(items, cursorIndex);
 
             } else if (currentItem.type == MENU_PAGE_NAV) {
@@ -1036,16 +1145,24 @@ int setupScreenIntervalSelection() {
     std::vector<MenuItem> items;
 
     // Item 0: Confirm button
-    items.push_back({MENU_CONFIRM, "Confirm", false, 0});
+    items.push_back({MENU_CONFIRM, "Confirm", "", false, 0, -1});
 
-    // Items 1-3: Radio buttons for intervals
-    items.push_back({MENU_RADIO, "5 min", false, 5});
-    items.push_back({MENU_RADIO, "10 min", false, 10});
-    items.push_back({MENU_RADIO, "15 min", true, 15}); // Default selected
+    // Items 1-3: Radio buttons for intervals (different in debug mode)
+    if (rtcState.debugMode) {
+        // Debug mode: shorter intervals for testing (5, 2, 1 min)
+        items.push_back({MENU_RADIO, "5 min", "", false, 5, -1});
+        items.push_back({MENU_RADIO, "2 min", "", false, 2, -1});
+        items.push_back({MENU_RADIO, "1 min", "", true, 1, -1}); // Default: 1 min
+    } else {
+        // Normal mode: standard intervals (15, 10, 5 min)
+        items.push_back({MENU_RADIO, "5 min", "", false, 5, -1});
+        items.push_back({MENU_RADIO, "10 min", "", false, 10, -1});
+        items.push_back({MENU_RADIO, "15 min", "", true, 15, -1}); // Default: 15 min
+    }
 
     int cursorIndex = 0; // Start at "Confirm"
     int scrollOffset = 0; // No scroll needed (only 4 items)
-    int selectedIntervalIndex = 3; // Default: 15 min (index 3)
+    int selectedIntervalIndex = 3; // Default interval (last option)
 
     // Initial render with full refresh to clear boot screen
     renderMenuScreen("", items, cursorIndex, scrollOffset, true);
@@ -1131,14 +1248,15 @@ void setupScreenFontSelection() {
     std::vector<MenuItem> items;
 
     // Item 0: Confirm button
-    items.push_back({MENU_CONFIRM, "Confirm", false, 0});
+    items.push_back({MENU_CONFIRM, "Confirm", "", false, 0, -1});
 
     // Items 1..N: Checkboxes for each font (all enabled by default)
     for (size_t i = 0; i < fontPaths.size(); i++) {
         // Extract font name from path
         String fontName = getFontName(fontPaths[i]);
+        String displayName = shortenTextIfNeeded(fontName, UI_MAX_TEXT_WIDTH);
         bool enabled = config.fontEnabled[i];
-        items.push_back({MENU_CHECKBOX, fontName, enabled, 0});
+        items.push_back({MENU_CHECKBOX, fontName, displayName, enabled, 0, i});
     }
 
     int cursorIndex = 0; // Start at "Confirm"
@@ -1308,20 +1426,6 @@ const unsigned long DEEP_SLEEP_TIMEOUT_MS = 10000; // 10 seconds from last full 
 bool isAutoWakeSession = false; // Flag: if true, skip idle wait and sleep immediately after render
 
 // View mode enumeration
-enum ViewMode {
-    BITMAP,    // Normal bitmap rendering with anti-aliasing
-    OUTLINE    // Vector outline with control points and construction lines
-};
-
-// RTC memory structure to persist state across deep sleep
-RTC_DATA_ATTR struct {
-    bool isValid;
-    int currentFontIndex;
-    uint32_t currentGlyphCodepoint;
-    ViewMode viewMode;  // STEP 5: Persist view mode across sleep
-    uint64_t totalMillis; // Total uptime in milliseconds since last reset (accumulated across sleep cycles)
-} rtcState = {false, 0, 0x0041, BITMAP, 0};  // Default: BITMAP mode, 0 uptime
-
 // Font management
 std::vector<String> fontPaths;
 int currentFontIndex = 0;
@@ -1380,18 +1484,70 @@ bool loadCurrentFont() {
     if (fontLoaded) {
         Serial.println("Unloading previous font...");
         canvas.destoryRender(24);           // Free label cache
-        canvas.destoryRender(GLYPH_SIZE);   // Free glyph cache
         canvas.unloadFont();                // Then unload font
         fontLoaded = false;
         delay(100);  // Give system time to free memory
     }
 
-    String fontPath = fontPaths[currentFontIndex];
-    Serial.printf("\n=== Loading font: %s ===\n", fontPath.c_str());
+    // v2.2.1: Check if fontPaths is empty (SD not available but cache might be)
+    String fontPath = "";
+    if (currentFontIndex < fontPaths.size()) {
+        fontPath = fontPaths[currentFontIndex];
+        Serial.printf("\n=== Loading font: %s ===\n", fontPath.c_str());
+    } else {
+        Serial.printf("\n=== Loading font index %d (SD unavailable - cache only) ===\n", currentFontIndex);
+    }
 
-    // Check if file exists
+    // ========================================
+    // Battery Optimization: Check font cache first
+    // ========================================
+
+    // 1. Check if this font is already cached in RAM
+    for (auto& entry : fontCache) {
+        if (entry.fontIndex == currentFontIndex) {
+            Serial.printf("Cache HIT: Loading font %d from RAM (SD not needed!)\n", currentFontIndex);
+            esp_err_t loadResult = canvas.loadFont(entry.data, entry.size);
+            if (loadResult == ESP_OK) {
+                Serial.printf("Font loaded from cache (%d bytes)\n", entry.size);
+                // Move to end (LRU - most recently used)
+                FontCacheEntry temp = entry;
+                fontCache.erase(std::find_if(fontCache.begin(), fontCache.end(),
+                    [&](const FontCacheEntry& e) { return e.fontIndex == currentFontIndex; }));
+                fontCache.push_back(temp);
+
+                // Create render cache for labels
+                esp_err_t renderResult24 = canvas.createRender(24, 64);
+                if (renderResult24 != ESP_OK) {
+                    Serial.println("ERROR: Failed to create render cache for size 24");
+                    canvas.unloadFont();
+                    return false;
+                }
+
+                fontLoaded = true;
+                Serial.println("=== Font loaded from cache successfully! ===\n");
+                return true;
+            } else {
+                Serial.println("WARNING: Cache load failed, falling back to SD");
+                // Continue to SD load below
+                break;
+            }
+        }
+    }
+
+    // 2. Cache MISS - load from SD
+    Serial.printf("RAM cache MISS for font %d\n", currentFontIndex);
+    Serial.printf("Loading font %d from SD\n", currentFontIndex);
+
+    // Check if SD is available and path is valid
+    if (fontPath.isEmpty()) {
+        Serial.println("ERROR: Font path is empty!");
+        Serial.println("Cannot load font - device needs reset with SD card");
+        return false;
+    }
+
+    // Check if file exists on SD
     if (!SD.exists(fontPath)) {
-        Serial.println("ERROR: Font file does not exist!");
+        Serial.println("ERROR: Font file does not exist on SD!");
         return false;
     }
 
@@ -1400,21 +1556,76 @@ bool loadCurrentFont() {
         Serial.println("ERROR: Cannot open font file!");
         return false;
     }
-    Serial.printf("Font file size: %d bytes\n", fontFile.size());
+    size_t fontFileSize = fontFile.size();
+    Serial.printf("Font file size: %d bytes\n", fontFileSize);
+
+    // 3. Decide if we should cache this font
+    bool shouldCache = (fontFileSize <= MAX_FONT_CACHE_SIZE);
+    uint8_t* fontData = nullptr;
+
+    if (shouldCache) {
+        // 4. Make room in cache if needed (LRU eviction)
+        while (totalCacheSize + fontFileSize > MAX_FONT_CACHE_SIZE && !fontCache.empty()) {
+            // Remove oldest entry (front of vector = least recently used)
+            Serial.printf("Evicting font %d from cache (%d bytes) to make room\n",
+                          fontCache[0].fontIndex, fontCache[0].size);
+            totalCacheSize -= fontCache[0].size;
+            free(fontCache[0].data);
+            fontCache.erase(fontCache.begin());
+        }
+
+        // 5. Try to allocate cache memory
+        if (totalCacheSize + fontFileSize <= MAX_FONT_CACHE_SIZE) {
+            fontData = (uint8_t*)malloc(fontFileSize);
+            if (fontData) {
+                // Read font into cache
+                fontFile.read(fontData, fontFileSize);
+                Serial.printf("Font read into cache buffer (%d bytes)\n", fontFileSize);
+            } else {
+                Serial.println("WARNING: malloc failed for font cache, loading directly from SD");
+                shouldCache = false;
+            }
+        } else {
+            Serial.println("WARNING: Not enough cache space, loading directly from SD");
+            shouldCache = false;
+        }
+    } else {
+        Serial.printf("Font too large to cache (>%d bytes), loading directly from SD\n", MAX_FONT_CACHE_SIZE);
+    }
+
     fontFile.close();
 
-    // Load font from SD onto canvas
-    Serial.println("Calling canvas.loadFont()...");
-    esp_err_t loadResult = canvas.loadFont(fontPath, SD);
-    Serial.printf("loadFont() returned: %d (ESP_OK=%d)\n", loadResult, ESP_OK);
+    // 6. Load font (either from cache buffer or SD)
+    esp_err_t loadResult;
+    if (shouldCache && fontData) {
+        Serial.println("Loading font from cache buffer...");
+        loadResult = canvas.loadFont(fontData, fontFileSize);
 
-    if (loadResult != ESP_OK) {
-        Serial.println("ERROR: Failed to load font from SD");
-        return false;
+        if (loadResult == ESP_OK) {
+            // Successfully loaded from cache buffer - add to cache list
+            fontCache.push_back({currentFontIndex, fontData, fontFileSize});
+            totalCacheSize += fontFileSize;
+            Serial.printf("Font cached successfully! (Total cache: %d/%d bytes, %d fonts)\n",
+                          totalCacheSize, MAX_FONT_CACHE_SIZE, fontCache.size());
+        } else {
+            Serial.println("ERROR: Failed to load font from cache buffer");
+            free(fontData);
+            return false;
+        }
+    } else {
+        // Load directly from SD (no caching)
+        Serial.println("Loading font directly from SD...");
+        loadResult = canvas.loadFont(fontPath, SD);
+        if (loadResult != ESP_OK) {
+            Serial.println("ERROR: Failed to load font from SD");
+            return false;
+        }
+        Serial.println("Font loaded from SD successfully (not cached)");
     }
-    Serial.println("Font loaded from SD successfully");
 
     // Create render cache for label size (24px)
+    // Note: Large glyph rendering uses direct FreeType API (drawPixel/drawLine),
+    // so we only need cache for small label text
     Serial.printf("Creating render cache for labels (size=24, cache=64)...\n");
     esp_err_t renderResult24 = canvas.createRender(24, 64);
     Serial.printf("createRender(24) returned: %d\n", renderResult24);
@@ -1425,21 +1636,20 @@ bool loadCurrentFont() {
         return false;
     }
 
-    // Create render cache for glyph size (375px)
-    Serial.printf("Creating render cache for glyph (size=%d, cache=12)...\n", GLYPH_SIZE);
-    esp_err_t renderResult375 = canvas.createRender(GLYPH_SIZE, 12);
-    Serial.printf("createRender(%d) returned: %d\n", GLYPH_SIZE, renderResult375);
-
-    if (renderResult375 != ESP_OK) {
-        Serial.println("ERROR: Failed to create render cache for glyph size");
-        canvas.destoryRender(24);  // Clean up label cache
-        canvas.unloadFont();
-        return false;
-    }
-
     fontLoaded = true;
     Serial.println("=== Font loaded successfully! ===\n");
     return true;
+}
+
+// Free all cached fonts (useful for cleanup or memory pressure)
+void clearFontCache() {
+    Serial.printf("Clearing font cache (%d fonts, %d bytes)...\n", fontCache.size(), totalCacheSize);
+    for (auto& entry : fontCache) {
+        free(entry.data);
+    }
+    fontCache.clear();
+    totalCacheSize = 0;
+    Serial.println("Font cache cleared");
 }
 
 // ========================================
@@ -2082,9 +2292,9 @@ void renderGlyphOutline() {
     // Note: shortenTextIfNeeded() uses bitmap font textSize=3 for measurement (calibrated to match FreeType 24px)
     String displayFontName = shortenTextIfNeeded(fontName, 480, 3);
 
-    // Now reload FreeType font for drawing labels (same font as glyph, but size 24)
+    // Reload font for label rendering to ensure correct state
     canvas.loadFont(fontPaths[currentFontIndex], SD);
-    canvas.createRender(24, 64); // Size 24 for labels
+    canvas.createRender(24, 64); // Recreate 24px cache
     canvas.setTextSize(24);
     canvas.setTextColor(15);
     canvas.setTextDatum(TC_DATUM);
@@ -2312,9 +2522,11 @@ void renderGlyphBitmap() {
     // Note: shortenTextIfNeeded() uses bitmap font textSize=3 for measurement (calibrated to match FreeType 24px)
     String displayFontName = shortenTextIfNeeded(fontName, 480, 3);
 
-    // Now reload FreeType font for drawing labels (same font as glyph, but size 24)
+    // IMPORTANT: After using FT_Set_Pixel_Sizes() directly for large glyph rendering,
+    // we need to reload font at size 24 for label rendering
+    // (FreeType state was modified, so we must reset it)
     canvas.loadFont(fontPaths[currentFontIndex], SD);
-    canvas.createRender(24, 64); // Size 24 for labels
+    canvas.createRender(24, 64); // Recreate 24px cache
     canvas.setTextSize(24);
     canvas.setTextColor(15);
     canvas.setTextDatum(TC_DATUM);
@@ -2595,19 +2807,21 @@ void lowBatteryShutdown() {
 void enterDeepSleep() {
     Serial.println("\n>>> Preparing for deep sleep...");
 
-    // Accumulate current session time to total uptime
-    uint32_t currentMillis = millis();
-    Serial.printf("DEBUG: Before accumulation: rtcState.totalMillis=%llu, millis()=%lu\n",
-                  rtcState.totalMillis, currentMillis);
-    rtcState.totalMillis += currentMillis;
-    Serial.printf("DEBUG: After accumulation: rtcState.totalMillis=%llu\n", rtcState.totalMillis);
+    // Accumulate current session time to total uptime (only in debug mode, for battery logging)
+    if (rtcState.debugMode) {
+        uint32_t currentMillis = millis();
+        Serial.printf("DEBUG: Before accumulation: rtcState.totalMillis=%llu, millis()=%lu\n",
+                      rtcState.totalMillis, currentMillis);
+        rtcState.totalMillis += currentMillis;
+        Serial.printf("DEBUG: After accumulation: rtcState.totalMillis=%llu\n", rtcState.totalMillis);
 
-    uint32_t totalMinutes = rtcState.totalMillis / 60000;
-    Serial.printf("Accumulated uptime: %lu minutes (%lud %02luh %02lum)\n",
-                  totalMinutes,
-                  totalMinutes / (24 * 60),
-                  (totalMinutes % (24 * 60)) / 60,
-                  totalMinutes % 60);
+        uint32_t totalMinutes = rtcState.totalMillis / 60000;
+        Serial.printf("Accumulated uptime: %lu minutes (%lud %02luh %02lum)\n",
+                      totalMinutes,
+                      totalMinutes / (24 * 60),
+                      (totalMinutes % (24 * 60)) / 60,
+                      totalMinutes % 60);
+    }
 
     // Save current state to RTC memory
     rtcState.isValid = true;
@@ -2731,9 +2945,9 @@ void shutdownWithScreen() {
     canvas.drawString("PaperSpecimen", 270, 30);
     Serial.println("Top label drawn");
 
-    // Bottom label: "v2.2"
+    // Bottom label: "v2.2.3" (or "v2.2.3*" in debug mode)
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString("v2.2", 270, 930);
+    canvas.drawString(rtcState.debugMode ? "v2.2.3*" : "v2.2.3", 270, 930);
     Serial.println("Bottom label drawn");
 
     // Full refresh to clear any ghosting
@@ -2761,38 +2975,46 @@ void shutdownWithScreen() {
 }
 
 void setup() {
+    // Check wake reason BEFORE initializing anything (to decide if Serial is needed)
+    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    bool isWakeFromSleep = (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER || wakeup_reason == ESP_SLEEP_WAKEUP_EXT0);
+
+    // Determine if Serial should be enabled:
+    // - Always enable on cold boot (needed for setup and debug mode trigger)
+    // - On wake from sleep: only enable if debug mode is active
+    bool enableSerial = !isWakeFromSleep || rtcState.debugMode;
+
     // Initialize M5Paper with minimal power consumption
     // Parameters: touchEnable, SDEnable, SerialEnable, BatteryADCEnable, I2CEnable
-    M5.begin(false, true, true, false, true);
+    M5.begin(false, true, enableSerial, false, true);
     // false: Touch disabled (saves power)
     // true:  SD enabled (needed for fonts)
-    // true:  Serial enabled (for debugging)
+    // enableSerial: Serial enabled conditionally (for debugging in debug mode or cold boot)
     // false: Battery ADC disabled initially (enable only when needed)
     // true:  I2C enabled (needed for RTC)
 
     M5.RTC.begin();
 
-    // Setup Serial for debugging
-    Serial.begin(115200);
-    delay(100); // Wait for serial to be ready
-
-    // Check wake reason
-    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    // Setup Serial only if enabled
+    if (enableSerial) {
+        Serial.begin(115200);
+        delay(100); // Wait for serial to be ready
+    }
 
     // Determine wake source
-    bool isWakeFromSleep = false;
     bool isAutoWake = false;
 
     if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
         // Woke from timer (auto-wake)
-        isWakeFromSleep = true;
         isAutoWake = true;
         isAutoWakeSession = true; // Flag to skip idle wait and sleep immediately
         Serial.println("\n\n=== PaperSpecimen Auto-Wake (Timer) ===");
         Serial.println("Woke by ESP32 timer (configured interval)");
+        if (!enableSerial) {
+            // Serial not initialized - debug mode is off
+        }
     } else if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
         // Woke from button press
-        isWakeFromSleep = true;
         isAutoWake = false;
         isAutoWakeSession = false; // Normal behavior: wait for user interaction
         Serial.println("\n\n=== PaperSpecimen Wake from Deep Sleep (Button) ===");
@@ -2868,13 +3090,47 @@ void setup() {
         // QR code in center
         drawQRCode(270, 480, 6, 6); // 6×6 px per module
 
-        // Bottom label: "v2.2" (same position as unicode)
+        // Bottom label: "v2.2.3" (will show "v2.2.3*" after boot if debug mode activated)
         canvas.setTextDatum(BC_DATUM);
-        canvas.drawString("v2.2", 270, 930);
+        canvas.drawString("v2.2.3", 270, 930);  // Boot splash always shows "v2.2.3" (asterisk appears after activation)
 
         canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-        Serial.println("Boot splash v2.2 with QR code displayed");
-        delay(5000); // Show boot splash for 5 seconds
+        Serial.println("Boot splash v2.2.3 with QR code displayed");
+
+        // Wait 5 seconds and detect button presses to enter debug mode
+        Serial.println("Waiting 5 seconds for debug mode trigger (2+ button presses)...");
+        int buttonPressCount = 0;
+        unsigned long startTime = millis();
+        bool lastButtonState = false;
+
+        while (millis() - startTime < 5000) {
+            M5.update(); // Update button states
+            bool currentButtonState = M5.BtnP.isPressed();
+
+            // Detect rising edge (button press)
+            if (currentButtonState && !lastButtonState) {
+                buttonPressCount++;
+                Serial.printf("Button press detected (%d/2)\n", buttonPressCount);
+            }
+
+            lastButtonState = currentButtonState;
+            delay(50); // Check every 50ms
+        }
+
+        // Activate debug mode if 2 or more presses detected
+        if (buttonPressCount >= 2) {
+            rtcState.debugMode = true;
+            Serial.println("\n*** DEBUG MODE ACTIVATED ***");
+            Serial.println("Debug mode will persist across wake cycles until device reset");
+
+            // Log reset marker to battery log (only in debug mode)
+            logBatteryData(0, 0.0, true); // isReset=true
+        } else {
+            rtcState.debugMode = false;
+            Serial.println("Normal mode (debug mode not activated)");
+            delay(100); // Allow serial buffer to flush
+            Serial.end(); // Disable serial immediately in normal mode to save CPU
+        }
     } else {
         Serial.println("Skipping boot screen (wake from sleep)");
     }
@@ -2900,51 +3156,75 @@ void setup() {
         Serial.printf("Random seed initialized: 0x%08X\n", seed);
     }
 
-    // Test microSD access
-    Serial.println("\n=== Testing microSD ===");
-    if (!SD.begin()) {
-        Serial.println("ERROR: microSD initialization failed!");
-        canvas.fillCanvas(15);
-        canvas.setTextColor(0);
-        canvas.setTextDatum(CC_DATUM);
-        canvas.setTextSize(3);
-        canvas.drawString("SD CARD ERROR", 270, 400);
-        canvas.setTextSize(2);
-        canvas.drawString("Please insert microSD", 270, 500);
-        canvas.drawString("with /fonts directory", 270, 540);
-        canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-        while(1) delay(1000); // halt
-    }
-    Serial.println("microSD initialized successfully");
+    // v2.2.1: SD card access conditional on boot type and cache validity
+    // On cold boot: SD is mandatory for initial setup
+    // On wake with valid cache: SD is optional (everything loads from cache)
+    bool sdAvailable = false;
 
-    // Log reset marker to battery log (only on cold boot, not on wake)
     if (!isWakeFromSleep) {
-        logBatteryData(0, 0.0, true); // isReset=true
-    }
+        // COLD BOOT: SD card is mandatory
+        Serial.println("\n=== Testing microSD (required for cold boot) ===");
+        if (!SD.begin()) {
+            Serial.println("ERROR: microSD initialization failed!");
+            canvas.fillCanvas(15);
+            canvas.setTextColor(0);
+            canvas.setTextDatum(CC_DATUM);
+            canvas.setTextSize(3);
+            canvas.drawString("SD CARD ERROR", 270, 400);
+            canvas.setTextSize(2);
+            canvas.drawString("Please insert microSD", 270, 500);
+            canvas.drawString("with /fonts directory", 270, 540);
+            canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+            while(1) delay(1000); // halt
+        }
+        Serial.println("microSD initialized successfully");
+        sdAvailable = true;
 
-    // Check if /fonts directory exists
-    if (!SD.exists("/fonts")) {
-        Serial.println("WARNING: /fonts directory not found");
-        Serial.println("Creating /fonts directory...");
-        SD.mkdir("/fonts");
-    }
+        // Check if /fonts directory exists
+        if (!SD.exists("/fonts")) {
+            Serial.println("WARNING: /fonts directory not found");
+            Serial.println("Creating /fonts directory...");
+            SD.mkdir("/fonts");
+        }
 
-    // Scan for font files
-    scanFonts();
+        // Scan for font files
+        scanFonts();
 
-    // Check if fonts were found
-    if (fontPaths.empty()) {
-        Serial.println("ERROR: No fonts found!");
-        canvas.fillCanvas(15);
-        canvas.setTextColor(0);
-        canvas.setTextDatum(CC_DATUM);
-        canvas.setTextSize(3);
-        canvas.drawString("NO FONTS FOUND", 270, 400);
-        canvas.setTextSize(2);
-        canvas.drawString("Add .ttf or .otf files", 270, 500);
-        canvas.drawString("to /fonts directory", 270, 540);
-        canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-        while(1) delay(1000); // halt
+        // Check if fonts were found
+        if (fontPaths.empty()) {
+            Serial.println("ERROR: No fonts found!");
+            canvas.fillCanvas(15);
+            canvas.setTextColor(0);
+            canvas.setTextDatum(CC_DATUM);
+            canvas.setTextSize(3);
+            canvas.drawString("NO FONTS FOUND", 270, 400);
+            canvas.setTextSize(2);
+            canvas.drawString("Add .ttf or .otf files", 270, 500);
+            canvas.drawString("to /fonts directory", 270, 540);
+            canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+            while(1) delay(1000); // halt
+        }
+    } else {
+        // WAKE FROM SLEEP: SD required
+        Serial.println("\n=== Testing microSD (required) ===");
+        sdAvailable = SD.begin();
+
+        if (sdAvailable) {
+            Serial.println("microSD available");
+            scanFonts();
+        } else {
+            Serial.println("✗ ERROR: SD card not available at wake!");
+
+            canvas.fillCanvas(15);
+            canvas.setTextColor(0);
+            canvas.setTextDatum(CC_DATUM);
+            canvas.setTextSize(3);
+            canvas.drawString("SD CARD ERROR", 270, 400);
+            canvas.setTextSize(2);
+            canvas.drawString("Insert SD card and reset", 270, 500);
+            canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+            while(1) delay(1000); // halt
+        }
     }
 
     // v2.2: Config handling
@@ -3033,8 +3313,10 @@ void setup() {
                       (totalMinutes % (24 * 60)) / 60,
                       totalMinutes % 60);
 
-        // Log battery data to .battery file (now that uptime has been properly calculated)
-        logBatteryData(batteryVoltage, batteryLevel, false);
+        // Log battery data to .battery file (only in debug mode)
+        if (rtcState.debugMode) {
+            logBatteryData(batteryVoltage, batteryLevel, false);
+        }
 
         if (isAutoWake) {
             // Auto-wake from RTC alarm: randomize based on config settings
@@ -3197,8 +3479,8 @@ void loop() {
 
     // Power management: Enter deep sleep based on context
     // Special case: Auto-wake session (timer wake) - sleep immediately after full refresh
-    if (isAutoWakeSession && millis() - lastFullRefreshTime >= 500) {
-        // Give 500ms for full refresh to complete, then sleep immediately
+    if (isAutoWakeSession && millis() - lastFullRefreshTime >= 200) {
+        // Give 200ms for display controller to stabilize after full refresh, then sleep immediately
         // No need to wait 10s idle time - this is automatic operation
         Serial.println(">>> Auto-wake session: entering deep sleep immediately after refresh");
         enterDeepSleep(); // This function never returns (enters deep sleep)
