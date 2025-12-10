@@ -158,6 +158,26 @@ The device will:
 | **Wheel SHORT PRESS** (BtnP) | Random glyph (keeps same font) |
 | **Wheel LONG PRESS** (BtnP, ≥5s) | Graceful shutdown with visual feedback |
 
+### Debug Mode (v2.2.3+)
+
+Debug mode enables full serial logging and battery tracking for development and testing.
+
+**How to activate:**
+1. Press the **reset button** on the back of the device
+2. During the 5-second boot splash, press the **center button** (BtnP) **2 or more times**
+3. Serial output will confirm: `*** DEBUG MODE ACTIVATED ***`
+4. Version footer will show `v2.2.3*` (asterisk indicates debug mode)
+
+**Debug mode features:**
+- Full serial output (115200 baud) - all operations logged
+- Battery logging to `/.battery` file on SD card (voltage, percentage, uptime)
+- Faster test intervals: **1/2/5 minutes** (vs 5/10/15 in normal mode)
+- Uptime tracking across sleep cycles
+
+**Debug mode persists** until device reset (survives sleep/wake cycles).
+
+**To exit debug mode:** Press reset button and **don't** press center button during boot.
+
 ## Display Information
 
 **Glyph Screen:**
