@@ -2750,14 +2750,6 @@ void lowBatteryShutdown() {
     int barY = battY + 6;
     canvas.fillRect(barX, barY, barW, barH, 12); // Gray-ish (simulating red on grayscale)
 
-    // Add text below battery
-    canvas.setTextSize(26);
-    canvas.setTextColor(15);
-    canvas.setTextDatum(TC_DATUM);
-    canvas.drawString("LOW BATTERY", 270, 380);
-    canvas.setTextSize(20);
-    canvas.drawString("Please charge device", 270, 540);
-
     // Push to display with full refresh
     canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
