@@ -1424,6 +1424,7 @@ unsigned long lastFullRefreshTime = 0;
 unsigned long lastButtonActivityTime = 0;
 const unsigned long DEEP_SLEEP_TIMEOUT_MS = 10000; // 10 seconds from last full refresh
 bool isAutoWakeSession = false; // Flag: if true, skip idle wait and sleep immediately after render
+bool isFirstRenderAfterWake = false; // Flag: if true, do double full refresh to eliminate wake artifacts
 
 // View mode enumeration
 // Font management
@@ -2303,20 +2304,46 @@ void renderGlyphOutline() {
     canvas.setTextDatum(BC_DATUM);
     canvas.drawString(codepointStr, 270, 930); // Bottom label
 
-    // Push to display with full refresh (clean display, no ghosting)
-    canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+    // Check if this is first render after wake (needs double full refresh for clean display)
+    if (isFirstRenderAfterWake) {
+        Serial.println("First render after wake: double full refresh");
+        canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+        M5.EPD.UpdateFull(UPDATE_MODE_GC16); // Second pass to eliminate wake artifacts
+        isFirstRenderAfterWake = false; // Reset flag
+        partialRefreshCount = 0;
+        hasPartialSinceLastFull = false;
+        lastFullRefreshTime = millis();
+    } else {
+        // Normal operation: partial refresh with auto-full after N renders or timeout
+        canvas.pushCanvas(0, 0, UPDATE_MODE_GL16);
 
-    // Second full refresh pass to eliminate any residual artifacts/stripes
-    // (UpdateFull performs cleaner refresh than pushCanvas)
-    M5.EPD.UpdateFull(UPDATE_MODE_GC16);
+        // Track first partial after full refresh
+        if (!hasPartialSinceLastFull) {
+            firstPartialAfterFullTime = millis();
+            hasPartialSinceLastFull = true;
+            Serial.println("First partial after full - starting 10s timer");
+        }
 
-    // Track last full refresh for power management
-    lastFullRefreshTime = millis();
+        partialRefreshCount++;
 
-    Serial.printf("Rendered outline: U+%04X with font %s (partial #%d)\n",
+        // Trigger full refresh if: A) 5 partials reached, OR B) 10s passed since first partial
+        unsigned long timeSinceFirstPartial = millis() - firstPartialAfterFullTime;
+        if (partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL ||
+            (hasPartialSinceLastFull && timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS)) {
+
+            Serial.printf("Full refresh triggered (count=%d, time since first partial=%lums)\n",
+                          partialRefreshCount, timeSinceFirstPartial);
+            M5.EPD.UpdateFull(UPDATE_MODE_GC16);
+
+            partialRefreshCount = 0;
+            hasPartialSinceLastFull = false;
+            lastFullRefreshTime = millis();
+        }
+    }
+
+    Serial.printf("Rendered outline: U+%04X with font %s\n",
                  currentGlyphCodepoint,
-                 getFontName(fontPaths[currentFontIndex]).c_str(),
-                 partialRefreshCount);
+                 getFontName(fontPaths[currentFontIndex]).c_str());
 
     Serial.println("=== STEP 3: Outline Rendered ===\n");
 }
@@ -2515,15 +2542,42 @@ void renderGlyphBitmap() {
     canvas.setTextDatum(BC_DATUM);
     canvas.drawString(codepointStr, centerX, 930);
 
-    // Push to display with full refresh (clean display, no ghosting)
-    canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+    // Check if this is first render after wake (needs double full refresh for clean display)
+    if (isFirstRenderAfterWake) {
+        Serial.println("First render after wake: double full refresh");
+        canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
+        M5.EPD.UpdateFull(UPDATE_MODE_GC16); // Second pass to eliminate wake artifacts
+        isFirstRenderAfterWake = false; // Reset flag
+        partialRefreshCount = 0;
+        hasPartialSinceLastFull = false;
+        lastFullRefreshTime = millis();
+    } else {
+        // Normal operation: partial refresh with auto-full after N renders or timeout
+        canvas.pushCanvas(0, 0, UPDATE_MODE_GL16);
 
-    // Second full refresh pass to eliminate any residual artifacts/stripes
-    // (UpdateFull performs cleaner refresh than pushCanvas)
-    M5.EPD.UpdateFull(UPDATE_MODE_GC16);
+        // Track first partial after full refresh
+        if (!hasPartialSinceLastFull) {
+            firstPartialAfterFullTime = millis();
+            hasPartialSinceLastFull = true;
+            Serial.println("First partial after full - starting 10s timer");
+        }
 
-    // Track last full refresh for power management
-    lastFullRefreshTime = millis();
+        partialRefreshCount++;
+
+        // Trigger full refresh if: A) 5 partials reached, OR B) 10s passed since first partial
+        unsigned long timeSinceFirstPartial = millis() - firstPartialAfterFullTime;
+        if (partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL ||
+            (hasPartialSinceLastFull && timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS)) {
+
+            Serial.printf("Full refresh triggered (count=%d, time since first partial=%lums)\n",
+                          partialRefreshCount, timeSinceFirstPartial);
+            M5.EPD.UpdateFull(UPDATE_MODE_GC16);
+
+            partialRefreshCount = 0;
+            hasPartialSinceLastFull = false;
+            lastFullRefreshTime = millis();
+        }
+    }
 
     Serial.printf("Rendered bitmap: U+%04X with font %s\n",
                   currentGlyphCodepoint, fontName.c_str());
@@ -2985,6 +3039,9 @@ void setup() {
 
     // Wake from sleep: reactivate hardware
     if (isWakeFromSleep) {
+        // Set flag for double full refresh on first render (eliminates wake artifacts)
+        isFirstRenderAfterWake = true;
+
         // Disable GPIO hold to allow normal operation
         gpio_deep_sleep_hold_dis();
         gpio_hold_dis((gpio_num_t)M5EPD_MAIN_PWR_PIN);
@@ -3428,10 +3485,21 @@ void setup() {
 void loop() {
     M5.update(); // Update button states
 
+    // Auto full refresh after 10s timeout if there was at least 1 partial
+    if (hasPartialSinceLastFull &&
+        (millis() - firstPartialAfterFullTime >= FULL_REFRESH_TIMEOUT_MS)) {
+        Serial.println(">>> Auto full refresh after 10s timeout - cleaning ghosting");
+        M5.EPD.UpdateFull(UPDATE_MODE_GC16);
+        partialRefreshCount = 0;
+        hasPartialSinceLastFull = false;
+        lastFullRefreshTime = millis(); // Track for power management
+    }
+
     // Power management: Enter deep sleep based on context
     // Special case: Auto-wake session (timer wake) - sleep immediately after refresh
     if (isAutoWakeSession && millis() - lastFullRefreshTime >= 1000) {
-        // Give 1000ms for double full refresh (pushCanvas + UpdateFull, ~900ms total) to complete
+        // Give 1000ms for double full refresh (first render after wake: ~900ms)
+        // or 200ms for subsequent partial refresh
         // No need to wait 10s idle time - this is automatic operation
         Serial.println(">>> Auto-wake session: entering deep sleep immediately after refresh");
         enterDeepSleep(); // This function never returns (enters deep sleep)
