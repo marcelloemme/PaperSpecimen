@@ -690,9 +690,9 @@ void renderUnifiedSetupScreen(std::vector<MenuItem>& items, int cursorIndex, boo
     canvas.setTextDatum(TC_DATUM);
     canvas.drawString("PaperSpecimen", 270, 30);
 
-    // Fixed footer: "v2.2.3" (or "v2.2.3*" in debug mode) at Y=930
+    // Fixed footer: "v2.2.4" (or "v2.2.4*" in debug mode) at Y=930
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString(rtcState.debugMode ? "v2.2.3*" : "v2.2.3", 270, 930);
+    canvas.drawString(rtcState.debugMode ? "v2.2.4*" : "v2.2.4", 270, 930);
 
     // Calculate available space for menu items
     const int headerBottom = 30 + 24; // Y=30 + text height
@@ -2965,9 +2965,9 @@ void shutdownWithScreen() {
     canvas.drawString("PaperSpecimen", 270, 30);
     Serial.println("Top label drawn");
 
-    // Bottom label: "v2.2.3" (or "v2.2.3*" in debug mode)
+    // Bottom label: "v2.2.4" (or "v2.2.4*" in debug mode)
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString(rtcState.debugMode ? "v2.2.3*" : "v2.2.3", 270, 930);
+    canvas.drawString(rtcState.debugMode ? "v2.2.4*" : "v2.2.4", 270, 930);
     Serial.println("Bottom label drawn");
 
     // Full refresh to clear any ghosting
@@ -3113,12 +3113,12 @@ void setup() {
         // QR code in center
         drawQRCode(270, 480, 6, 6); // 6×6 px per module
 
-        // Bottom label: "v2.2.3" (will show "v2.2.3*" after boot if debug mode activated)
+        // Bottom label: "v2.2.4" (will show "v2.2.4*" after boot if debug mode activated)
         canvas.setTextDatum(BC_DATUM);
-        canvas.drawString("v2.2.3", 270, 930);  // Boot splash always shows "v2.2.3" (asterisk appears after activation)
+        canvas.drawString("v2.2.4", 270, 930);  // Boot splash always shows "v2.2.4" (asterisk appears after activation)
 
         canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-        Serial.println("Boot splash v2.2.3 with QR code displayed");
+        Serial.println("Boot splash v2.2.4 with QR code displayed");
 
         // Wait 5 seconds and detect button presses to enter debug mode
         Serial.println("Waiting 5 seconds for debug mode trigger (2+ button presses)...");
