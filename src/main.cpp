@@ -2306,34 +2306,12 @@ void renderGlyphOutline() {
     // Push to display with full refresh (clean display, no ghosting)
     canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
-    // Track first partial after full refresh to start 10s timer
-    if (!hasPartialSinceLastFull) {
-        firstPartialAfterFullTime = millis();
-        hasPartialSinceLastFull = true;
-        Serial.println("First partial after full - starting 10s timer");
-    }
+    // Second full refresh pass to eliminate any residual artifacts/stripes
+    // (UpdateFull performs cleaner refresh than pushCanvas)
+    M5.EPD.UpdateFull(UPDATE_MODE_GC16);
 
-    // Track refresh counts
-    partialRefreshCount++;
-
-    // Trigger full refresh if:
-    // A) 5 partials reached, OR
-    // B) 10 seconds passed since FIRST partial AND at least 1 partial happened
-    unsigned long timeSinceFirstPartial = millis() - firstPartialAfterFullTime;
-    if (partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL ||
-        (hasPartialSinceLastFull && timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS)) {
-
-        Serial.printf("Full refresh triggered (count=%d, time since first partial=%lums)\n",
-                      partialRefreshCount, timeSinceFirstPartial);
-        M5.EPD.UpdateFull(UPDATE_MODE_GC16);
-
-        // Reset all counters
-        partialRefreshCount = 0;
-        hasPartialSinceLastFull = false;
-
-        // Track last full refresh for power management
-        lastFullRefreshTime = millis();
-    }
+    // Track last full refresh for power management
+    lastFullRefreshTime = millis();
 
     Serial.printf("Rendered outline: U+%04X with font %s (partial #%d)\n",
                  currentGlyphCodepoint,
@@ -2540,28 +2518,12 @@ void renderGlyphBitmap() {
     // Push to display with full refresh (clean display, no ghosting)
     canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
-    // Track first partial after full refresh
-    if (!hasPartialSinceLastFull) {
-        firstPartialAfterFullTime = millis();
-        hasPartialSinceLastFull = true;
-        Serial.println("First partial after full - starting 10s timer");
-    }
+    // Second full refresh pass to eliminate any residual artifacts/stripes
+    // (UpdateFull performs cleaner refresh than pushCanvas)
+    M5.EPD.UpdateFull(UPDATE_MODE_GC16);
 
-    partialRefreshCount++;
-
-    // Trigger full refresh if needed
-    unsigned long timeSinceFirstPartial = millis() - firstPartialAfterFullTime;
-    if (partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL ||
-        (hasPartialSinceLastFull && timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS)) {
-
-        Serial.printf("Full refresh triggered (count=%d, time since first partial=%lums)\n",
-                      partialRefreshCount, timeSinceFirstPartial);
-        M5.EPD.UpdateFull(UPDATE_MODE_GC16);
-
-        partialRefreshCount = 0;
-        hasPartialSinceLastFull = false;
-        lastFullRefreshTime = millis();
-    }
+    // Track last full refresh for power management
+    lastFullRefreshTime = millis();
 
     Serial.printf("Rendered bitmap: U+%04X with font %s\n",
                   currentGlyphCodepoint, fontName.c_str());
@@ -3039,11 +3001,6 @@ void setup() {
         M5.EPD.Active();
         Serial.println("Display controller reactivated");
 
-        // Give display controller time to fully stabilize after deep sleep
-        // (voltage regulators, temperature sensor, waveform initialization)
-        delay(200); // 200ms stabilization time
-        Serial.println("Display controller stabilized");
-
         // DEBUG: Print RTC state immediately after wake
         Serial.printf("DEBUG: rtcState.totalMillis = %llu (isValid=%d)\n",
                       rtcState.totalMillis, rtcState.isValid);
@@ -3479,20 +3436,10 @@ void setup() {
 void loop() {
     M5.update(); // Update button states
 
-    // Auto full refresh after 10s timeout if there was at least 1 partial
-    if (hasPartialSinceLastFull &&
-        (millis() - firstPartialAfterFullTime >= FULL_REFRESH_TIMEOUT_MS)) {
-        Serial.println(">>> Auto full refresh after 10s timeout - cleaning ghosting");
-        M5.EPD.UpdateFull(UPDATE_MODE_GC16);
-        partialRefreshCount = 0;
-        hasPartialSinceLastFull = false;
-        lastFullRefreshTime = millis(); // Track for power management
-    }
-
     // Power management: Enter deep sleep based on context
-    // Special case: Auto-wake session (timer wake) - sleep immediately after full refresh
-    if (isAutoWakeSession && millis() - lastFullRefreshTime >= 600) {
-        // Give 600ms for full refresh (GC16 ~450-500ms) to complete physically, then sleep immediately
+    // Special case: Auto-wake session (timer wake) - sleep immediately after refresh
+    if (isAutoWakeSession && millis() - lastFullRefreshTime >= 1000) {
+        // Give 1000ms for double full refresh (pushCanvas + UpdateFull, ~900ms total) to complete
         // No need to wait 10s idle time - this is automatic operation
         Serial.println(">>> Auto-wake session: entering deep sleep immediately after refresh");
         enterDeepSleep(); // This function never returns (enters deep sleep)
