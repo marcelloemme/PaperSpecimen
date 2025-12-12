@@ -1,5 +1,5 @@
 #include <M5EPD.h>
-#include <WiFi.h>
+// #include <WiFi.h>  // Removed: WiFi not used, saves ~60-100KB Flash
 #include <SD.h>
 #include <vector>
 #include <esp_sleep.h>
@@ -3059,10 +3059,10 @@ void setup() {
         }
     }
 
-    // Disable WiFi and Bluetooth for power saving
-    WiFi.mode(WIFI_OFF);
-    btStop();
-    Serial.println("WiFi and Bluetooth disabled");
+    // WiFi and Bluetooth are disabled by default (not initialized)
+    // WiFi.mode(WIFI_OFF);  // Removed: WiFi library not included
+    // btStop();             // Removed: Bluetooth library not included
+    Serial.println("WiFi and Bluetooth not initialized (power saving)");
 
     // Disable external power (sensors like SHT30 temperature/humidity)
     M5.disableEXTPower();

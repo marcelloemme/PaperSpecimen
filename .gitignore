@@ -22,3 +22,7 @@
 
 # Serial output logs
 screenlog.*
+
+# Battery test logs
+.battery
+battery_test_results.txt
