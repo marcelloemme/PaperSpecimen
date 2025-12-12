@@ -2326,13 +2326,17 @@ void renderGlyphOutline() {
 
         partialRefreshCount++;
 
-        // Trigger full refresh if: A) 5 partials reached, OR B) 10s passed since first partial
+        // Trigger full refresh if:
+        // (A) 5 partials reached OR (B) 10s passed since first partial
+        // AND at least 10s passed since last full refresh (prevents too frequent full refreshes)
         unsigned long timeSinceFirstPartial = millis() - firstPartialAfterFullTime;
-        if (partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL ||
-            (hasPartialSinceLastFull && timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS)) {
+        unsigned long timeSinceLastFull = millis() - lastFullRefreshTime;
 
-            Serial.printf("Full refresh triggered (count=%d, time since first partial=%lums)\n",
-                          partialRefreshCount, timeSinceFirstPartial);
+        if ((partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL || timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS) &&
+            timeSinceLastFull >= FULL_REFRESH_TIMEOUT_MS) {
+
+            Serial.printf("Full refresh triggered (count=%d, time since first partial=%lums, time since last full=%lums)\n",
+                          partialRefreshCount, timeSinceFirstPartial, timeSinceLastFull);
             M5.EPD.UpdateFull(UPDATE_MODE_GC16);
 
             partialRefreshCount = 0;
@@ -2564,13 +2568,17 @@ void renderGlyphBitmap() {
 
         partialRefreshCount++;
 
-        // Trigger full refresh if: A) 5 partials reached, OR B) 10s passed since first partial
+        // Trigger full refresh if:
+        // (A) 5 partials reached OR (B) 10s passed since first partial
+        // AND at least 10s passed since last full refresh (prevents too frequent full refreshes)
         unsigned long timeSinceFirstPartial = millis() - firstPartialAfterFullTime;
-        if (partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL ||
-            (hasPartialSinceLastFull && timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS)) {
+        unsigned long timeSinceLastFull = millis() - lastFullRefreshTime;
 
-            Serial.printf("Full refresh triggered (count=%d, time since first partial=%lums)\n",
-                          partialRefreshCount, timeSinceFirstPartial);
+        if ((partialRefreshCount >= MAX_PARTIAL_BEFORE_FULL || timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS) &&
+            timeSinceLastFull >= FULL_REFRESH_TIMEOUT_MS) {
+
+            Serial.printf("Full refresh triggered (count=%d, time since first partial=%lums, time since last full=%lums)\n",
+                          partialRefreshCount, timeSinceFirstPartial, timeSinceLastFull);
             M5.EPD.UpdateFull(UPDATE_MODE_GC16);
 
             partialRefreshCount = 0;
@@ -3486,9 +3494,15 @@ void loop() {
     M5.update(); // Update button states
 
     // Auto full refresh after 10s timeout if there was at least 1 partial
+    // AND at least 10s passed since last full refresh
+    unsigned long timeSinceFirstPartial = millis() - firstPartialAfterFullTime;
+    unsigned long timeSinceLastFull = millis() - lastFullRefreshTime;
+
     if (hasPartialSinceLastFull &&
-        (millis() - firstPartialAfterFullTime >= FULL_REFRESH_TIMEOUT_MS)) {
-        Serial.println(">>> Auto full refresh after 10s timeout - cleaning ghosting");
+        timeSinceFirstPartial >= FULL_REFRESH_TIMEOUT_MS &&
+        timeSinceLastFull >= FULL_REFRESH_TIMEOUT_MS) {
+        Serial.printf(">>> Auto full refresh after timeout (time since first partial=%lums, time since last full=%lums)\n",
+                      timeSinceFirstPartial, timeSinceLastFull);
         M5.EPD.UpdateFull(UPDATE_MODE_GC16);
         partialRefreshCount = 0;
         hasPartialSinceLastFull = false;
