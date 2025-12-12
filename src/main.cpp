@@ -2303,8 +2303,8 @@ void renderGlyphOutline() {
     canvas.setTextDatum(BC_DATUM);
     canvas.drawString(codepointStr, 270, 930); // Bottom label
 
-    // Push to display with smart refresh logic
-    canvas.pushCanvas(0, 0, UPDATE_MODE_GL16);
+    // Push to display with full refresh (clean display, no ghosting)
+    canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
     // Track first partial after full refresh to start 10s timer
     if (!hasPartialSinceLastFull) {
@@ -2537,8 +2537,8 @@ void renderGlyphBitmap() {
     canvas.setTextDatum(BC_DATUM);
     canvas.drawString(codepointStr, centerX, 930);
 
-    // Push to display
-    canvas.pushCanvas(0, 0, UPDATE_MODE_GL16);
+    // Push to display with full refresh (clean display, no ghosting)
+    canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
     // Track first partial after full refresh
     if (!hasPartialSinceLastFull) {
@@ -3487,8 +3487,8 @@ void loop() {
 
     // Power management: Enter deep sleep based on context
     // Special case: Auto-wake session (timer wake) - sleep immediately after full refresh
-    if (isAutoWakeSession && millis() - lastFullRefreshTime >= 200) {
-        // Give 200ms for display controller to stabilize after full refresh, then sleep immediately
+    if (isAutoWakeSession && millis() - lastFullRefreshTime >= 600) {
+        // Give 600ms for full refresh (GC16 ~450-500ms) to complete physically, then sleep immediately
         // No need to wait 10s idle time - this is automatic operation
         Serial.println(">>> Auto-wake session: entering deep sleep immediately after refresh");
         enterDeepSleep(); // This function never returns (enters deep sleep)
