@@ -2757,8 +2757,10 @@ void logBatteryData(uint32_t voltage, float percentage, bool isReset) {
 void lowBatteryShutdown() {
     Serial.println("\n!!! LOW BATTERY - SHUTTING DOWN !!!");
 
-    // Clear screen
+    // Clear screen with full refresh
     M5.EPD.Clear(true);
+    delay(1000); // Wait for Clear() to complete physically on e-ink
+
     canvas.fillCanvas(0); // White background
 
     // Draw battery icon (stylized AA battery shape)
@@ -2794,9 +2796,12 @@ void lowBatteryShutdown() {
     canvas.setTextSize(20);
     canvas.drawString("Please charge device", 270, 540);
 
-    // Push to display
+    // Push to display with full refresh
     canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-    delay(2000); // Show for 2 seconds
+
+    // Wait for e-ink refresh to physically complete (~500ms) + display time
+    delay(1000); // Hardware refresh completion
+    delay(4000); // Keep visible for user to read (total 5 seconds)
 
     // Complete shutdown (only RTC stays powered)
     Serial.println("Entering complete shutdown...");
