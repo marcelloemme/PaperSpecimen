@@ -2799,9 +2799,8 @@ void lowBatteryShutdown() {
     // Push to display with full refresh
     canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
-    // Wait for e-ink refresh to physically complete (~500ms) + display time
-    delay(1000); // Hardware refresh completion
-    delay(4000); // Keep visible for user to read (total 5 seconds)
+    // Wait for e-ink refresh to physically complete (~500ms), then immediate shutdown
+    delay(500); // Hardware refresh completion
 
     // Complete shutdown (only RTC stays powered)
     Serial.println("Entering complete shutdown...");
@@ -3039,6 +3038,11 @@ void setup() {
         // Wake display controller
         M5.EPD.Active();
         Serial.println("Display controller reactivated");
+
+        // Give display controller time to fully stabilize after deep sleep
+        // (voltage regulators, temperature sensor, waveform initialization)
+        delay(200); // 200ms stabilization time
+        Serial.println("Display controller stabilized");
 
         // DEBUG: Print RTC state immediately after wake
         Serial.printf("DEBUG: rtcState.totalMillis = %llu (isValid=%d)\n",
