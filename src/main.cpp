@@ -3048,7 +3048,7 @@ void setup() {
         // For now, we'll add the sleep time later after config is loaded
     }
 
-    // Check battery level on wake from sleep (logging happens later after uptime calculation)
+    // Read battery level on wake from sleep (but check after canvas init)
     float batteryLevel = 0.0;
     uint32_t batteryVoltage = 0;
     if (isWakeFromSleep) {
@@ -3056,12 +3056,6 @@ void setup() {
         batteryVoltage = M5.getBatteryVoltage();
         batteryLevel = getBatteryPercentage();
         Serial.printf("Battery level: %.1f%%\n", batteryLevel);
-
-        // If battery is below 5%, show low battery screen and shutdown
-        if (batteryLevel < 5.0) {
-            lowBatteryShutdown();
-            // Function never returns - device shuts down
-        }
     }
 
     // WiFi and Bluetooth are disabled by default (not initialized)
@@ -3078,6 +3072,12 @@ void setup() {
 
     // Create canvas - full screen
     canvas.createCanvas(540, 960);
+
+    // Check battery AFTER canvas is initialized (needed for lowBatteryShutdown display)
+    if (isWakeFromSleep && batteryLevel < 5.0) {
+        lowBatteryShutdown();
+        // Function never returns - device shuts down
+    }
 
     // Show boot message ONLY on cold boot (not on wake from sleep)
     if (!isWakeFromSleep) {
