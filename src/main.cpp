@@ -3171,6 +3171,7 @@ void setup() {
         Serial.println("\n=== Testing microSD (required for cold boot) ===");
         if (!SD.begin()) {
             Serial.println("ERROR: microSD initialization failed!");
+            M5.EPD.Clear(true); // Full refresh to clear boot splash
             canvas.fillCanvas(15);
             canvas.setTextColor(0);
             canvas.setTextDatum(CC_DATUM);
@@ -3198,6 +3199,7 @@ void setup() {
         // Check if fonts were found
         if (fontPaths.empty()) {
             Serial.println("ERROR: No fonts found!");
+            M5.EPD.Clear(true); // Full refresh to clear boot splash
             canvas.fillCanvas(15);
             canvas.setTextColor(0);
             canvas.setTextDatum(CC_DATUM);
@@ -3220,6 +3222,7 @@ void setup() {
         } else {
             Serial.println("✗ ERROR: SD card not available at wake!");
 
+            M5.EPD.Clear(true); // Full refresh to clear previous font specimen
             canvas.fillCanvas(15);
             canvas.setTextColor(0);
             canvas.setTextDatum(CC_DATUM);
