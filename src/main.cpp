@@ -690,9 +690,9 @@ void renderUnifiedSetupScreen(std::vector<MenuItem>& items, int cursorIndex, boo
     canvas.setTextDatum(TC_DATUM);
     canvas.drawString("PaperSpecimen", 270, 30);
 
-    // Fixed footer: "v2.2.4" (or "v2.2.4*" in debug mode) at Y=930
+    // Fixed footer: "v3.0.0" (or "v3.0.0*" in debug mode) at Y=930
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString(rtcState.debugMode ? "v2.2.4*" : "v2.2.4", 270, 930);
+    canvas.drawString(rtcState.debugMode ? "v3.0.0*" : "v3.0.0", 270, 930);
 
     // Calculate available space for menu items
     const int headerBottom = 30 + 24; // Y=30 + text height
@@ -1425,6 +1425,23 @@ unsigned long lastButtonActivityTime = 0;
 const unsigned long DEEP_SLEEP_TIMEOUT_MS = 10000; // 10 seconds from last full refresh
 bool isAutoWakeSession = false; // Flag: if true, skip idle wait and sleep immediately after render
 bool isFirstRenderAfterWake = false; // Flag: if true, do double full refresh to eliminate wake artifacts
+
+// Touch screen state (v3.0)
+bool touchEnabled = false; // Touch is enabled only when device is awake (not during auto-wake, boot, shutdown)
+int16_t touchStartX = 0;
+int16_t touchStartY = 0;
+unsigned long touchStartTime = 0;
+bool touchWasPressed = false;
+bool longPressFired = false; // Prevent multiple toggle on single long press
+
+// Touch gesture thresholds (v3.0)
+const int16_t SWIPE_VERTICAL_THRESHOLD = 45;   // Minimum vertical pixels for swipe detection
+const int16_t SWIPE_HORIZONTAL_MAX = 50;       // Maximum horizontal drift for vertical swipe
+const unsigned long LONG_PRESS_DURATION = 800; // 800ms for mode toggle
+const int16_t CENTER_AREA_LEFT = 0;            // Center 540×540 area
+const int16_t CENTER_AREA_RIGHT = 540;
+const int16_t CENTER_AREA_TOP = 210;           // (960-540)/2 = 210
+const int16_t CENTER_AREA_BOTTOM = 750;        // 210+540 = 750
 
 // View mode enumeration
 // Font management
@@ -2721,6 +2738,27 @@ void randomFont() {
     }
 }
 
+// Touch screen utilities (v3.0)
+bool isTouchInCenterArea(int16_t x, int16_t y) {
+    return (x >= CENTER_AREA_LEFT && x <= CENTER_AREA_RIGHT &&
+            y >= CENTER_AREA_TOP && y <= CENTER_AREA_BOTTOM);
+}
+
+void enableTouch() {
+    if (!touchEnabled) {
+        M5.TP.SetRotation(90); // Match display rotation
+        touchEnabled = true;
+        Serial.println("Touch screen enabled");
+    }
+}
+
+void disableTouch() {
+    if (touchEnabled) {
+        touchEnabled = false;
+        Serial.println("Touch screen disabled");
+    }
+}
+
 // Check battery level and return percentage (0-100)
 float getBatteryPercentage() {
     // Take average of 5 readings to reduce ADC noise
@@ -2826,6 +2864,9 @@ void lowBatteryShutdown() {
 // Save state and enter deep sleep
 void enterDeepSleep() {
     Serial.println("\n>>> Preparing for deep sleep...");
+
+    // v3.0: Disable touch screen before sleep to save power
+    disableTouch();
 
     // Accumulate current session time to total uptime (only in debug mode, for battery logging)
     if (rtcState.debugMode) {
@@ -2965,9 +3006,9 @@ void shutdownWithScreen() {
     canvas.drawString("PaperSpecimen", 270, 30);
     Serial.println("Top label drawn");
 
-    // Bottom label: "v2.2.4" (or "v2.2.4*" in debug mode)
+    // Bottom label: "v3.0.0" (or "v3.0.0*" in debug mode)
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString(rtcState.debugMode ? "v2.2.4*" : "v2.2.4", 270, 930);
+    canvas.drawString(rtcState.debugMode ? "v3.0.0*" : "v3.0.0", 270, 930);
     Serial.println("Bottom label drawn");
 
     // Full refresh to clear any ghosting
@@ -3113,12 +3154,12 @@ void setup() {
         // QR code in center
         drawQRCode(270, 480, 6, 6); // 6×6 px per module
 
-        // Bottom label: "v2.2.4" (will show "v2.2.4*" after boot if debug mode activated)
+        // Bottom label: "v3.0.0" (will show "v3.0.0*" after boot if debug mode activated)
         canvas.setTextDatum(BC_DATUM);
-        canvas.drawString("v2.2.4", 270, 930);  // Boot splash always shows "v2.2.4" (asterisk appears after activation)
+        canvas.drawString("v3.0.0", 270, 930);  // Boot splash always shows "v3.0.0" (asterisk appears after activation)
 
         canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-        Serial.println("Boot splash v2.2.4 with QR code displayed");
+        Serial.println("Boot splash v3.0.0 with QR code displayed");
 
         // Wait 5 seconds and detect button presses to enter debug mode
         Serial.println("Waiting 5 seconds for debug mode trigger (2+ button presses)...");
@@ -3482,6 +3523,15 @@ void setup() {
         }
     }
 
+    // v3.0: Enable touch screen if NOT auto-wake session
+    // Touch is disabled during auto-wake (timer wake) to save power
+    if (!isAutoWakeSession) {
+        enableTouch();
+        Serial.println("  Touch: Swipe up/down to change font, tap center for random glyph, long press for mode toggle");
+    } else {
+        Serial.println("Touch disabled (auto-wake session)");
+    }
+
     Serial.println("\n=== Setup Complete ===");
     Serial.println("Controls:");
     Serial.println("  Wheel UP (BtnR): Next font");
@@ -3492,6 +3542,83 @@ void setup() {
 
 void loop() {
     M5.update(); // Update button states
+
+    // v3.0: Touch screen polling and gesture detection
+    if (touchEnabled) {
+        M5.TP.update(); // Poll touch controller
+
+        tp_finger_t finger = M5.TP.readFinger(0); // Read first touch point
+        bool isTouched = (finger.x > 0 || finger.y > 0); // Touch detected if coordinates valid
+
+        if (isTouched && !touchWasPressed) {
+            // Touch just started
+            touchStartX = finger.x;
+            touchStartY = finger.y;
+            touchStartTime = millis();
+            touchWasPressed = true;
+            longPressFired = false;
+            Serial.printf("Touch started at (%d, %d)\n", finger.x, finger.y);
+        }
+
+        if (isTouched && touchWasPressed) {
+            // Touch is held - check for long press
+            unsigned long touchDuration = millis() - touchStartTime;
+
+            if (touchDuration >= LONG_PRESS_DURATION && !longPressFired &&
+                isTouchInCenterArea(finger.x, finger.y)) {
+                // Long press detected in center area → Toggle view mode
+                longPressFired = true; // Prevent multiple toggles
+                lastButtonActivityTime = millis();
+                isAutoWakeSession = false;
+
+                Serial.println("\n>>> Touch LONG PRESS - Toggle view mode");
+                currentViewMode = (currentViewMode == BITMAP) ? OUTLINE : BITMAP;
+                Serial.printf("Switched to %s mode\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+                renderGlyph();
+            }
+        }
+
+        if (!isTouched && touchWasPressed) {
+            // Touch just released
+            unsigned long touchDuration = millis() - touchStartTime;
+            int16_t deltaX = finger.x - touchStartX;
+            int16_t deltaY = finger.y - touchStartY;
+
+            touchWasPressed = false;
+
+            if (!longPressFired) { // Only process tap/swipe if long press didn't fire
+                // Check for swipe (vertical movement > threshold, horizontal drift < max)
+                if (abs(deltaY) > SWIPE_VERTICAL_THRESHOLD && abs(deltaX) < SWIPE_HORIZONTAL_MAX) {
+                    // Vertical swipe detected
+                    lastButtonActivityTime = millis();
+                    isAutoWakeSession = false;
+
+                    if (deltaY > 0) {
+                        // Swipe DOWN → Next font
+                        Serial.printf("\n>>> Touch SWIPE DOWN (deltaY=%d) - Next font\n", deltaY);
+                        nextFont();
+                    } else {
+                        // Swipe UP → Previous font
+                        Serial.printf("\n>>> Touch SWIPE UP (deltaY=%d) - Previous font\n", deltaY);
+                        previousFont();
+                    }
+                    delay(300); // Debounce
+                }
+                // Check for tap in center area (short press, minimal movement)
+                else if (touchDuration < LONG_PRESS_DURATION &&
+                         abs(deltaX) < 20 && abs(deltaY) < 20 &&
+                         isTouchInCenterArea(touchStartX, touchStartY)) {
+                    // Tap in center area → Random glyph
+                    lastButtonActivityTime = millis();
+                    isAutoWakeSession = false;
+
+                    Serial.println("\n>>> Touch TAP CENTER - Random glyph");
+                    randomGlyph();
+                    delay(300); // Debounce
+                }
+            }
+        }
+    }
 
     // Auto full refresh after 10s timeout if there was at least 1 partial
     // AND at least 10s passed since last full refresh

@@ -4,7 +4,7 @@
 
 Visualize TrueType glyphs in high-quality anti-aliased bitmap or detailed vector outline mode with Bézier construction lines. Configure fonts, refresh intervals, and standby behavior with an intuitive UI. Enjoy weeks of battery life with intelligent deep sleep.
 
-**Current version: v2.2.4**
+**Current version: v3.0.0**
 
 ## Features
 
@@ -158,7 +158,7 @@ The device will:
 | **Wheel SHORT PRESS** (BtnP) | Random glyph (keeps same font) |
 | **Wheel LONG PRESS** (BtnP, ≥5s) | Graceful shutdown with visual feedback |
 
-### Debug Mode (v2.2.4+)
+### Debug Mode (v3.0.0+)
 
 Debug mode enables full serial logging and battery tracking for development and testing.
 
@@ -166,7 +166,7 @@ Debug mode enables full serial logging and battery tracking for development and 
 1. Press the **reset button** on the back of the device
 2. During the 5-second boot splash, press the **center button** (BtnP) **2 or more times**
 3. Serial output will confirm: `*** DEBUG MODE ACTIVATED ***`
-4. Version footer will show `v2.2.4*` (asterisk indicates debug mode)
+4. Version footer will show `v3.0.0*` (asterisk indicates debug mode)
 
 **Debug mode features:**
 - Full serial output (115200 baud) - all operations logged
@@ -435,7 +435,7 @@ RTC_DATA_ATTR struct {
 
 ## Version History
 
-### v2.2.4 (Current)
+### v3.0.0 (Current)
 - **Performance optimizations**: Improved menu responsiveness
   - Pre-computed font name truncation (calculated once, not on every cursor move)
   - Smart menu state updates (no rebuild on checkbox/radio toggle)
