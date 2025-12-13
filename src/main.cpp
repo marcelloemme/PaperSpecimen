@@ -1435,8 +1435,9 @@ bool touchWasPressed = false;
 bool longPressFired = false; // Prevent multiple toggle on single long press
 
 // Touch gesture thresholds (v3.0)
-const int16_t SWIPE_VERTICAL_THRESHOLD = 45;   // Minimum vertical pixels for swipe detection
+const int16_t SWIPE_VERTICAL_THRESHOLD = 30;   // Minimum vertical pixels for swipe (lowered for easier detection)
 const int16_t SWIPE_HORIZONTAL_MAX = 50;       // Maximum horizontal drift for vertical swipe
+const int16_t TAP_MAX_MOVEMENT = 10;           // Maximum movement for tap (strict: near-zero movement)
 const unsigned long LONG_PRESS_DURATION = 800; // 800ms for mode toggle
 const int16_t CENTER_AREA_LEFT = 0;            // Center 540×540 area
 const int16_t CENTER_AREA_RIGHT = 540;
@@ -3614,7 +3615,7 @@ void loop() {
                 }
                 // Check for tap in center area (short press, minimal movement)
                 else if (touchDuration < LONG_PRESS_DURATION &&
-                         abs(deltaX) < 20 && abs(deltaY) < 20 &&
+                         abs(deltaX) < TAP_MAX_MOVEMENT && abs(deltaY) < TAP_MAX_MOVEMENT &&
                          isTouchInCenterArea(touchStartX, touchStartY)) {
                     // Tap in center area → Random glyph
                     lastButtonActivityTime = millis();
@@ -3623,6 +3624,10 @@ void loop() {
                     Serial.println("\n>>> Touch TAP CENTER - Random glyph");
                     randomGlyph();
                     delay(300); // Debounce
+                } else {
+                    // Movement in gap (10-30px) → Ignore, requires more decisive gesture
+                    Serial.printf("Touch gesture ignored: movement too small for swipe (%d, %d)\n",
+                                 deltaX, deltaY);
                 }
             }
         }
