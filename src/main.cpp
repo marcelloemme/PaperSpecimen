@@ -2746,9 +2746,14 @@ bool isTouchInCenterArea(int16_t x, int16_t y) {
 
 void enableTouch() {
     if (!touchEnabled) {
+        // Initialize GT911 touch controller: SDA=21, SCL=22, INT=36
+        if (M5.TP.begin(21, 22, 36) != ESP_OK) {
+            Serial.println("ERROR: Touch pad initialization failed");
+            return;
+        }
         M5.TP.SetRotation(90); // Match display rotation
         touchEnabled = true;
-        Serial.println("Touch screen enabled");
+        Serial.println("Touch screen enabled (GT911 initialized)");
     }
 }
 
