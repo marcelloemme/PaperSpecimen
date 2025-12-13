@@ -3549,45 +3549,48 @@ void loop() {
     M5.update(); // Update button states
 
     // v3.0: Touch screen polling and gesture detection
-    if (touchEnabled) {
-        M5.TP.update(); // Poll touch controller
+    if (touchEnabled && M5.TP.available()) {
+        // Check if finger is currently touching (not released)
+        if (!M5.TP.isFingerUp()) {
+            M5.TP.update(); // Update touch data
+            tp_finger_t finger = M5.TP.readFinger(0); // Read first touch point
 
-        tp_finger_t finger = M5.TP.readFinger(0); // Read first touch point
-        bool isTouched = (finger.x > 0 || finger.y > 0); // Touch detected if coordinates valid
+            if (!touchWasPressed) {
+                // Touch just started
+                touchStartX = finger.x;
+                touchStartY = finger.y;
+                touchStartTime = millis();
+                touchWasPressed = true;
+                longPressFired = false;
+                Serial.printf("Touch started at (%d, %d)\n", finger.x, finger.y);
+            } else {
+                // Touch is held - check for long press
+                unsigned long touchDuration = millis() - touchStartTime;
 
-        if (isTouched && !touchWasPressed) {
-            // Touch just started
-            touchStartX = finger.x;
-            touchStartY = finger.y;
-            touchStartTime = millis();
-            touchWasPressed = true;
-            longPressFired = false;
-            Serial.printf("Touch started at (%d, %d)\n", finger.x, finger.y);
-        }
+                if (touchDuration >= LONG_PRESS_DURATION && !longPressFired &&
+                    isTouchInCenterArea(finger.x, finger.y)) {
+                    // Long press detected in center area → Toggle view mode
+                    longPressFired = true; // Prevent multiple toggles
+                    lastButtonActivityTime = millis();
+                    isAutoWakeSession = false;
 
-        if (isTouched && touchWasPressed) {
-            // Touch is held - check for long press
-            unsigned long touchDuration = millis() - touchStartTime;
-
-            if (touchDuration >= LONG_PRESS_DURATION && !longPressFired &&
-                isTouchInCenterArea(finger.x, finger.y)) {
-                // Long press detected in center area → Toggle view mode
-                longPressFired = true; // Prevent multiple toggles
-                lastButtonActivityTime = millis();
-                isAutoWakeSession = false;
-
-                Serial.println("\n>>> Touch LONG PRESS - Toggle view mode");
-                currentViewMode = (currentViewMode == BITMAP) ? OUTLINE : BITMAP;
-                Serial.printf("Switched to %s mode\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
-                renderGlyph();
+                    Serial.println("\n>>> Touch LONG PRESS - Toggle view mode");
+                    currentViewMode = (currentViewMode == BITMAP) ? OUTLINE : BITMAP;
+                    Serial.printf("Switched to %s mode\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+                    renderGlyph();
+                }
             }
-        }
+        } else if (touchWasPressed) {
+            // Finger was released - process gesture
+            M5.TP.update(); // Get final coordinates
+            tp_finger_t finger = M5.TP.readFinger(0);
 
-        if (!isTouched && touchWasPressed) {
-            // Touch just released
             unsigned long touchDuration = millis() - touchStartTime;
             int16_t deltaX = finger.x - touchStartX;
             int16_t deltaY = finger.y - touchStartY;
+
+            Serial.printf("Touch released: duration=%lums, delta=(%d, %d)\n",
+                         touchDuration, deltaX, deltaY);
 
             touchWasPressed = false;
 
