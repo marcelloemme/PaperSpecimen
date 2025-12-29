@@ -567,6 +567,12 @@ void renderMenuScreen(const String& title, std::vector<MenuItem>& items, int cur
 extern std::vector<String> fontPaths;
 String getFontName(const String& path); // Already defined earlier in the file
 
+// v3.0: Touch screen forward declarations
+extern bool touchEnabled;
+extern const int16_t TAP_MAX_MOVEMENT;
+void enableTouch();
+int getMenuItemAtTouch(int16_t touchY, const std::vector<MenuItem>& items);
+
 // Build menu items for current page
 void buildUnifiedMenu(std::vector<MenuItem>& items, PaginationState& pagination,
                       int selectedInterval, const std::vector<bool>& fontEnabled,
@@ -690,9 +696,9 @@ void renderUnifiedSetupScreen(std::vector<MenuItem>& items, int cursorIndex, boo
     canvas.setTextDatum(TC_DATUM);
     canvas.drawString("PaperSpecimen", 270, 30);
 
-    // Fixed footer: "v3.0.0" (or "v3.0.0*" in debug mode) at Y=930
+    // Fixed footer: "v3.0.1" (or "v3.0.1*" in debug mode) at Y=930
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString(rtcState.debugMode ? "v3.0.0*" : "v3.0.0", 270, 930);
+    canvas.drawString(rtcState.debugMode ? "v3.0.1*" : "v3.0.1", 270, 930);
 
     // Calculate available space for menu items
     const int headerBottom = 30 + 24; // Y=30 + text height
@@ -792,6 +798,13 @@ void setupUnicodeRanges() {
 
     // Initial render with full refresh
     renderUnifiedSetupScreen(items, cursorIndex, true);
+
+    // v3.0: Touch state for Unicode ranges menu (touch already enabled in setupScreenUnified)
+    bool rangesTouchWasPressed = false;
+    bool rangesTouchStartValid = false;
+    int16_t rangesTouchStartX = 0;
+    int16_t rangesTouchStartY = 0;
+    unsigned long rangesTouchStartTime = 0;
 
     bool exitRangesScreen = false;
 
@@ -896,6 +909,114 @@ void setupUnicodeRanges() {
 
             delay(200);
         }
+
+        // v3.0: Touch screen navigation (same logic as main setup)
+        if (touchEnabled && M5.TP.available()) {
+            if (!M5.TP.isFingerUp()) {
+                M5.TP.update();
+                tp_finger_t finger = M5.TP.readFinger(0);
+
+                if (!rangesTouchWasPressed) {
+                    rangesTouchWasPressed = true;
+                    rangesTouchStartTime = millis();
+                    rangesTouchStartValid = false;
+
+                    if (finger.x > 0 && finger.x <= 540 && finger.y > 0 && finger.y <= 960) {
+                        rangesTouchStartX = finger.x;
+                        rangesTouchStartY = finger.y;
+                        rangesTouchStartValid = true;
+                    }
+                } else {
+                    if (!rangesTouchStartValid && finger.x > 0 && finger.x <= 540 && finger.y > 0 && finger.y <= 960) {
+                        rangesTouchStartX = finger.x;
+                        rangesTouchStartY = finger.y;
+                        rangesTouchStartValid = true;
+                    }
+                }
+            } else if (rangesTouchWasPressed) {
+                rangesTouchWasPressed = false;
+
+                if (!rangesTouchStartValid) {
+                    continue;
+                }
+
+                M5.TP.update();
+                tp_finger_t finger = M5.TP.readFinger(0);
+
+                unsigned long touchDuration = millis() - rangesTouchStartTime;
+                int16_t deltaX = finger.x - rangesTouchStartX;
+                int16_t deltaY = finger.y - rangesTouchStartY;
+
+                if (touchDuration < 800 && abs(deltaX) < TAP_MAX_MOVEMENT && abs(deltaY) < TAP_MAX_MOVEMENT) {
+                    int tappedItem = getMenuItemAtTouch(rangesTouchStartY, items);
+
+                    if (tappedItem >= 0 && tappedItem < items.size()) {
+                        MenuItem& tappedMenuItem = items[tappedItem];
+                        if (tappedMenuItem.type == MENU_SEPARATOR ||
+                            (tappedMenuItem.type == MENU_LABEL && tappedMenuItem.fontIndex != -2)) {
+                            continue;
+                        }
+
+                        cursorIndex = tappedItem;
+                        MenuItem& currentItem = items[cursorIndex];
+
+                        if (currentItem.type == MENU_CONFIRM) {
+                            config.rangeEnabled = rangeEnabledLocal;
+                            exitRangesScreen = true;
+
+                        } else if (currentItem.type == MENU_LABEL && currentItem.fontIndex == -2) {
+                            bool newState = !currentItem.selected;
+                            for (size_t i = 0; i < rangeEnabledLocal.size(); i++) {
+                                rangeEnabledLocal[i] = newState;
+                            }
+                            for (auto& item : items) {
+                                if (item.type == MENU_CHECKBOX) {
+                                    item.selected = newState;
+                                } else if (item.type == MENU_LABEL && item.fontIndex == -2) {
+                                    item.selected = newState;
+                                }
+                            }
+                            renderUnifiedSetupScreen(items, cursorIndex, false);
+
+                        } else if (currentItem.type == MENU_CHECKBOX) {
+                            int rangeIndex = currentItem.fontIndex;
+                            rangeEnabledLocal[rangeIndex] = !rangeEnabledLocal[rangeIndex];
+                            currentItem.selected = rangeEnabledLocal[rangeIndex];
+
+                            bool allSelected = true;
+                            for (bool enabled : rangeEnabledLocal) {
+                                if (!enabled) {
+                                    allSelected = false;
+                                    break;
+                                }
+                            }
+                            for (auto& item : items) {
+                                if (item.type == MENU_LABEL && item.fontIndex == -2) {
+                                    item.selected = allSelected;
+                                    break;
+                                }
+                            }
+                            renderUnifiedSetupScreen(items, cursorIndex, false);
+
+                        } else if (currentItem.type == MENU_PAGE_NAV) {
+                            if (currentItem.value == -1) {
+                                currentPage--;
+                            } else {
+                                currentPage++;
+                            }
+                            rebuildMenu();
+                            cursorIndex = 3;
+                            if (currentPage > 0) {
+                                cursorIndex = 4;
+                            }
+                            renderUnifiedSetupScreen(items, cursorIndex, false);
+                        }
+
+                        delay(200);
+                    }
+                }
+            }
+        }
     }
 
     Serial.println("=== Unicode Ranges Configuration Complete ===\n");
@@ -922,6 +1043,16 @@ void setupScreenUnified() {
 
     // Initial render with full refresh
     renderUnifiedSetupScreen(items, cursorIndex, true);
+
+    // v3.0: Enable touch for setup navigation
+    enableTouch();
+
+    // Touch state for setup menu
+    bool setupTouchWasPressed = false;
+    bool setupTouchStartValid = false;
+    int16_t setupTouchStartX = 0;
+    int16_t setupTouchStartY = 0;
+    unsigned long setupTouchStartTime = 0;
 
     // Auto-confirm timeout: 60 seconds of inactivity
     unsigned long lastActivityTime = millis();
@@ -1124,6 +1255,162 @@ void setupScreenUnified() {
             }
 
             delay(200);
+        }
+
+        // v3.0: Touch screen navigation
+        if (touchEnabled && M5.TP.available()) {
+            if (!M5.TP.isFingerUp()) {
+                M5.TP.update();
+                tp_finger_t finger = M5.TP.readFinger(0);
+
+                if (!setupTouchWasPressed) {
+                    // Touch started
+                    setupTouchWasPressed = true;
+                    setupTouchStartTime = millis();
+                    setupTouchStartValid = false;
+
+                    if (finger.x > 0 && finger.x <= 540 && finger.y > 0 && finger.y <= 960) {
+                        setupTouchStartX = finger.x;
+                        setupTouchStartY = finger.y;
+                        setupTouchStartValid = true;
+                    }
+                } else {
+                    // Touch held - update coordinates if not valid yet
+                    if (!setupTouchStartValid && finger.x > 0 && finger.x <= 540 && finger.y > 0 && finger.y <= 960) {
+                        setupTouchStartX = finger.x;
+                        setupTouchStartY = finger.y;
+                        setupTouchStartValid = true;
+                    }
+                }
+            } else if (setupTouchWasPressed) {
+                // Touch released - process tap
+                setupTouchWasPressed = false;
+
+                if (!setupTouchStartValid) {
+                    continue; // No valid coordinates
+                }
+
+                M5.TP.update();
+                tp_finger_t finger = M5.TP.readFinger(0);
+
+                unsigned long touchDuration = millis() - setupTouchStartTime;
+                int16_t deltaX = finger.x - setupTouchStartX;
+                int16_t deltaY = finger.y - setupTouchStartY;
+
+                // Check for tap (short duration, minimal movement)
+                if (touchDuration < 800 && abs(deltaX) < TAP_MAX_MOVEMENT && abs(deltaY) < TAP_MAX_MOVEMENT) {
+                    lastActivityTime = millis(); // Reset timeout
+
+                    // Find which menu item was tapped
+                    int tappedItem = getMenuItemAtTouch(setupTouchStartY, items);
+
+                    if (tappedItem >= 0 && tappedItem < items.size()) {
+                        // Skip if tapped item is separator or non-clickable label
+                        MenuItem& tappedMenuItem = items[tappedItem];
+                        if (tappedMenuItem.type == MENU_SEPARATOR ||
+                            (tappedMenuItem.type == MENU_LABEL && tappedMenuItem.fontIndex != -2 && tappedMenuItem.fontIndex != -5)) {
+                            Serial.printf("Touch tap ignored: separator or non-clickable label at index %d\n", tappedItem);
+                            continue;
+                        }
+
+                        // Move cursor to tapped item and execute action
+                        cursorIndex = tappedItem;
+                        Serial.printf("Touch tap: item %d selected\n", tappedItem);
+
+                        // Execute the same action as BtnP would (duplicate logic from above)
+                        MenuItem& currentItem = items[cursorIndex];
+
+                        if (currentItem.type == MENU_CONFIRM) {
+                            // Same as button confirm logic
+                            bool anyFontSelected = false;
+                            for (bool enabled : fontEnabledLocal) {
+                                if (enabled) {
+                                    anyFontSelected = true;
+                                    break;
+                                }
+                            }
+                            if (!anyFontSelected) {
+                                for (size_t i = 0; i < fontEnabledLocal.size(); i++) {
+                                    fontEnabledLocal[i] = true;
+                                }
+                            }
+                            confirmed = true;
+                            config.wakeIntervalMinutes = selectedInterval;
+                            config.fontEnabled = fontEnabledLocal;
+                            config.allowDifferentFont = allowDifferentFontLocal;
+                            config.allowDifferentMode = allowDifferentModeLocal;
+
+                        } else if (currentItem.type == MENU_RADIO) {
+                            selectedInterval = currentItem.value;
+                            for (auto& item : items) {
+                                if (item.type == MENU_RADIO) {
+                                    item.selected = (item.value == selectedInterval);
+                                }
+                            }
+                            renderUnifiedSetupScreen(items, cursorIndex);
+
+                        } else if (currentItem.type == MENU_LABEL && currentItem.fontIndex == -5) {
+                            setupUnicodeRanges();
+                            buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
+                            renderUnifiedSetupScreen(items, cursorIndex, true);
+                            lastActivityTime = millis();
+
+                        } else if (currentItem.type == MENU_LABEL && currentItem.fontIndex == -2) {
+                            bool newState = !currentItem.selected;
+                            for (size_t i = 0; i < fontEnabledLocal.size(); i++) {
+                                fontEnabledLocal[i] = newState;
+                            }
+                            for (auto& item : items) {
+                                if (item.type == MENU_CHECKBOX && item.fontIndex >= 0) {
+                                    item.selected = newState;
+                                } else if (item.type == MENU_LABEL && item.fontIndex == -2) {
+                                    item.selected = newState;
+                                }
+                            }
+                            renderUnifiedSetupScreen(items, cursorIndex);
+
+                        } else if (currentItem.type == MENU_CHECKBOX) {
+                            if (currentItem.fontIndex == -3) {
+                                allowDifferentFontLocal = !allowDifferentFontLocal;
+                                currentItem.selected = allowDifferentFontLocal;
+                            } else if (currentItem.fontIndex == -4) {
+                                allowDifferentModeLocal = !allowDifferentModeLocal;
+                                currentItem.selected = allowDifferentModeLocal;
+                            } else if (currentItem.fontIndex >= 0) {
+                                fontEnabledLocal[currentItem.fontIndex] = !fontEnabledLocal[currentItem.fontIndex];
+                                currentItem.selected = fontEnabledLocal[currentItem.fontIndex];
+
+                                bool allSelected = true;
+                                for (bool enabled : fontEnabledLocal) {
+                                    if (!enabled) {
+                                        allSelected = false;
+                                        break;
+                                    }
+                                }
+                                for (auto& item : items) {
+                                    if (item.type == MENU_LABEL && item.fontIndex == -2) {
+                                        item.selected = allSelected;
+                                        break;
+                                    }
+                                }
+                            }
+                            renderUnifiedSetupScreen(items, cursorIndex);
+
+                        } else if (currentItem.type == MENU_PAGE_NAV) {
+                            if (currentItem.value == -1) {
+                                pagination.currentPage--;
+                            } else {
+                                pagination.currentPage++;
+                            }
+                            buildUnifiedMenu(items, pagination, selectedInterval, fontEnabledLocal, allowDifferentFontLocal, allowDifferentModeLocal);
+                            cursorIndex = 12;
+                            renderUnifiedSetupScreen(items, cursorIndex);
+                        }
+
+                        delay(200);
+                    }
+                }
+            }
         }
 
         delay(50);
@@ -1432,17 +1719,22 @@ int16_t touchStartX = 0;
 int16_t touchStartY = 0;
 unsigned long touchStartTime = 0;
 bool touchWasPressed = false;
+bool touchStartValid = false; // Flag to track if we have valid start coordinates (filter GT911 spurious (0,0))
 bool longPressFired = false; // Prevent multiple toggle on single long press
 
 // Touch gesture thresholds (v3.0)
-const int16_t SWIPE_VERTICAL_THRESHOLD = 30;   // Minimum vertical pixels for swipe (lowered for easier detection)
-const int16_t SWIPE_HORIZONTAL_MAX = 50;       // Maximum horizontal drift for vertical swipe
-const int16_t TAP_MAX_MOVEMENT = 10;           // Maximum movement for tap (strict: near-zero movement)
+const int16_t TAP_MAX_MOVEMENT = 20;           // Maximum movement for tap
 const unsigned long LONG_PRESS_DURATION = 800; // 800ms for mode toggle
-const int16_t CENTER_AREA_LEFT = 0;            // Center 540×540 area
-const int16_t CENTER_AREA_RIGHT = 540;
-const int16_t CENTER_AREA_TOP = 210;           // (960-540)/2 = 210
-const int16_t CENTER_AREA_BOTTOM = 750;        // 210+540 = 750
+
+// Screen divided into 3 vertical zones (180px each), with 90px margins top/bottom for labels
+const int16_t ZONE_TOP_MARGIN = 90;            // Leave top area free for labels
+const int16_t ZONE_BOTTOM_MARGIN = 870;        // 960 - 90 = 870, leave bottom area free
+const int16_t ZONE_LEFT_MIN = 0;
+const int16_t ZONE_LEFT_MAX = 180;
+const int16_t ZONE_CENTER_MIN = 180;
+const int16_t ZONE_CENTER_MAX = 360;
+const int16_t ZONE_RIGHT_MIN = 360;
+const int16_t ZONE_RIGHT_MAX = 540;
 
 // View mode enumeration
 // Font management
@@ -2740,9 +3032,40 @@ void randomFont() {
 }
 
 // Touch screen utilities (v3.0)
-bool isTouchInCenterArea(int16_t x, int16_t y) {
-    return (x >= CENTER_AREA_LEFT && x <= CENTER_AREA_RIGHT &&
-            y >= CENTER_AREA_TOP && y <= CENTER_AREA_BOTTOM);
+// Returns: 0=left zone, 1=center zone, 2=right zone, -1=invalid
+int getTouchZone(int16_t x, int16_t y) {
+    // Check Y is within active area (exclude top/bottom 90px for labels)
+    if (y < ZONE_TOP_MARGIN || y > ZONE_BOTTOM_MARGIN) return -1;
+
+    // Check X zone
+    if (x >= ZONE_LEFT_MIN && x < ZONE_LEFT_MAX) return 0;      // Left: previous font
+    if (x >= ZONE_CENTER_MIN && x < ZONE_CENTER_MAX) return 1;  // Center: random glyph
+    if (x >= ZONE_RIGHT_MIN && x < ZONE_RIGHT_MAX) return 2;    // Right: next font
+    return -1; // Out of bounds
+}
+
+// Helper function for setup screen touch: returns index of tapped menu item (-1 if none)
+int getMenuItemAtTouch(int16_t touchY, const std::vector<MenuItem>& items) {
+    // Calculate menu layout (same logic as renderUnifiedSetupScreen)
+    const int headerBottom = 30 + 24;  // Y=30 + text height
+    const int footerTop = 930 - 24;    // Y=930 - text height
+    const int availableHeight = footerTop - headerBottom;
+
+    int totalItemHeight = items.size() * UI_LINE_HEIGHT;
+    int flexSpace = max(0, (availableHeight - totalItemHeight) / 2);
+    int startY = headerBottom + flexSpace;
+
+    // Check which item was tapped
+    for (int i = 0; i < items.size(); i++) {
+        int itemY = startY + i * UI_LINE_HEIGHT;
+        int itemBottom = itemY + UI_LINE_HEIGHT;
+
+        if (touchY >= itemY && touchY < itemBottom) {
+            return i;  // Found the tapped item
+        }
+    }
+
+    return -1;  // No item at this Y coordinate
 }
 
 void enableTouch() {
@@ -3012,9 +3335,9 @@ void shutdownWithScreen() {
     canvas.drawString("PaperSpecimen", 270, 30);
     Serial.println("Top label drawn");
 
-    // Bottom label: "v3.0.0" (or "v3.0.0*" in debug mode)
+    // Bottom label: "v3.0.1" (or "v3.0.1*" in debug mode)
     canvas.setTextDatum(BC_DATUM);
-    canvas.drawString(rtcState.debugMode ? "v3.0.0*" : "v3.0.0", 270, 930);
+    canvas.drawString(rtcState.debugMode ? "v3.0.1*" : "v3.0.1", 270, 930);
     Serial.println("Bottom label drawn");
 
     // Full refresh to clear any ghosting
@@ -3160,12 +3483,12 @@ void setup() {
         // QR code in center
         drawQRCode(270, 480, 6, 6); // 6×6 px per module
 
-        // Bottom label: "v3.0.0" (will show "v3.0.0*" after boot if debug mode activated)
+        // Bottom label: "v3.0.1" (will show "v3.0.1*" after boot if debug mode activated)
         canvas.setTextDatum(BC_DATUM);
-        canvas.drawString("v3.0.0", 270, 930);  // Boot splash always shows "v3.0.0" (asterisk appears after activation)
+        canvas.drawString("v3.0.1", 270, 930);  // Boot splash always shows "v3.0.1" (asterisk appears after activation)
 
         canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
-        Serial.println("Boot splash v3.0.0 with QR code displayed");
+        Serial.println("Boot splash v3.0.1 with QR code displayed");
 
         // Wait 5 seconds and detect button presses to enter debug mode
         Serial.println("Waiting 5 seconds for debug mode trigger (2+ button presses)...");
@@ -3533,7 +3856,7 @@ void setup() {
     // Touch is disabled during auto-wake (timer wake) to save power
     if (!isAutoWakeSession) {
         enableTouch();
-        Serial.println("  Touch: Swipe up/down to change font, tap center for random glyph, long press for mode toggle");
+        Serial.println("  Touch: Tap left=prev font | center=random glyph (long press=mode toggle) | right=next font");
     } else {
         Serial.println("Touch disabled (auto-wake session)");
     }
@@ -3558,31 +3881,59 @@ void loop() {
 
             if (!touchWasPressed) {
                 // Touch just started
-                touchStartX = finger.x;
-                touchStartY = finger.y;
-                touchStartTime = millis();
                 touchWasPressed = true;
+                touchStartTime = millis();
+                touchStartValid = false; // Not valid yet
                 longPressFired = false;
-                Serial.printf("Touch started at (%d, %d)\n", finger.x, finger.y);
+
+                // Try to get valid coordinates (filter spurious (0,0) readings)
+                // M5Paper screen: 540x960, valid range X:[1-540], Y:[1-960]
+                if (finger.x > 0 && finger.x <= 540 && finger.y > 0 && finger.y <= 960) {
+                    touchStartX = finger.x;
+                    touchStartY = finger.y;
+                    touchStartValid = true;
+                    Serial.printf("Touch started at (%d, %d)\n", finger.x, finger.y);
+                } else {
+                    // Invalid coordinates - wait for next update
+                    Serial.printf("Touch started: waiting for valid coordinates (got %d, %d)\n", finger.x, finger.y);
+                }
             } else {
-                // Touch is held - check for long press
-                unsigned long touchDuration = millis() - touchStartTime;
+                // Touch is held - if we don't have valid start yet, try to get it now
+                if (!touchStartValid && finger.x > 0 && finger.x <= 540 && finger.y > 0 && finger.y <= 960) {
+                    touchStartX = finger.x;
+                    touchStartY = finger.y;
+                    touchStartValid = true;
+                    Serial.printf("Touch coordinates now valid: (%d, %d)\n", finger.x, finger.y);
+                }
 
-                if (touchDuration >= LONG_PRESS_DURATION && !longPressFired &&
-                    isTouchInCenterArea(finger.x, finger.y)) {
-                    // Long press detected in center area → Toggle view mode
-                    longPressFired = true; // Prevent multiple toggles
-                    lastButtonActivityTime = millis();
-                    isAutoWakeSession = false;
+                // Check for long press in center zone (only if we have valid start coordinates)
+                if (touchStartValid) {
+                    unsigned long touchDuration = millis() - touchStartTime;
+                    int zone = getTouchZone(touchStartX, touchStartY);
 
-                    Serial.println("\n>>> Touch LONG PRESS - Toggle view mode");
-                    currentViewMode = (currentViewMode == BITMAP) ? OUTLINE : BITMAP;
-                    Serial.printf("Switched to %s mode\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
-                    renderGlyph();
+                    if (touchDuration >= LONG_PRESS_DURATION && !longPressFired && zone == 1) {
+                        // Long press detected in center zone → Toggle view mode
+                        longPressFired = true; // Prevent multiple toggles
+                        lastButtonActivityTime = millis();
+                        isAutoWakeSession = false;
+
+                        Serial.println("\n>>> Touch LONG PRESS (center) - Toggle view mode");
+                        currentViewMode = (currentViewMode == BITMAP) ? OUTLINE : BITMAP;
+                        Serial.printf("Switched to %s mode\n", currentViewMode == BITMAP ? "BITMAP" : "OUTLINE");
+                        renderGlyph();
+                    }
                 }
             }
         } else if (touchWasPressed) {
-            // Finger was released - process gesture
+            // Finger was released - process gesture (only if we got valid start coordinates)
+            touchWasPressed = false;
+
+            if (!touchStartValid) {
+                // Never got valid coordinates during this touch
+                Serial.println("Touch released: ignored (never got valid coordinates)");
+                return; // Skip gesture processing
+            }
+
             M5.TP.update(); // Get final coordinates
             tp_finger_t finger = M5.TP.readFinger(0);
 
@@ -3590,44 +3941,41 @@ void loop() {
             int16_t deltaX = finger.x - touchStartX;
             int16_t deltaY = finger.y - touchStartY;
 
-            Serial.printf("Touch released: duration=%lums, delta=(%d, %d)\n",
-                         touchDuration, deltaX, deltaY);
+            Serial.printf("Touch released: duration=%lums, delta=(%d, %d), startX=%d\n",
+                         touchDuration, deltaX, deltaY, touchStartX);
 
-            touchWasPressed = false;
+            if (!longPressFired) { // Only process tap if long press didn't fire
+                // Check for tap (short duration, minimal movement)
+                if (touchDuration < LONG_PRESS_DURATION &&
+                    abs(deltaX) < TAP_MAX_MOVEMENT && abs(deltaY) < TAP_MAX_MOVEMENT) {
 
-            if (!longPressFired) { // Only process tap/swipe if long press didn't fire
-                // Check for swipe (vertical movement > threshold, horizontal drift < max)
-                if (abs(deltaY) > SWIPE_VERTICAL_THRESHOLD && abs(deltaX) < SWIPE_HORIZONTAL_MAX) {
-                    // Vertical swipe detected
+                    // Determine which zone was tapped
+                    int zone = getTouchZone(touchStartX, touchStartY);
+
                     lastButtonActivityTime = millis();
                     isAutoWakeSession = false;
 
-                    if (deltaY > 0) {
-                        // Swipe DOWN → Next font
-                        Serial.printf("\n>>> Touch SWIPE DOWN (deltaY=%d) - Next font\n", deltaY);
+                    if (zone == 0) {
+                        // Left zone → Previous font
+                        Serial.println("\n>>> Touch TAP LEFT - Previous font");
+                        previousFont();
+                    } else if (zone == 1) {
+                        // Center zone → Random glyph
+                        Serial.println("\n>>> Touch TAP CENTER - Random glyph");
+                        randomGlyph();
+                    } else if (zone == 2) {
+                        // Right zone → Next font
+                        Serial.println("\n>>> Touch TAP RIGHT - Next font");
                         nextFont();
                     } else {
-                        // Swipe UP → Previous font
-                        Serial.printf("\n>>> Touch SWIPE UP (deltaY=%d) - Previous font\n", deltaY);
-                        previousFont();
+                        Serial.printf("Touch ignored: invalid zone (x=%d, y=%d)\n", touchStartX, touchStartY);
                     }
-                    delay(300); // Debounce
-                }
-                // Check for tap in center area (short press, minimal movement)
-                else if (touchDuration < LONG_PRESS_DURATION &&
-                         abs(deltaX) < TAP_MAX_MOVEMENT && abs(deltaY) < TAP_MAX_MOVEMENT &&
-                         isTouchInCenterArea(touchStartX, touchStartY)) {
-                    // Tap in center area → Random glyph
-                    lastButtonActivityTime = millis();
-                    isAutoWakeSession = false;
 
-                    Serial.println("\n>>> Touch TAP CENTER - Random glyph");
-                    randomGlyph();
                     delay(300); // Debounce
                 } else {
-                    // Movement in gap (10-30px) → Ignore, requires more decisive gesture
-                    Serial.printf("Touch gesture ignored: movement too small for swipe (%d, %d)\n",
-                                 deltaX, deltaY);
+                    // Not a tap (too much movement or too long without reaching long press threshold)
+                    Serial.printf("Touch ignored: not a tap (duration=%lums, movement=%d,%d)\n",
+                                 touchDuration, deltaX, deltaY);
                 }
             }
         }
